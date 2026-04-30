@@ -12,20 +12,12 @@ from pointcept.engines.defaults import (
 )
 from pointcept.engines.test import TESTERS
 from pointcept.engines.launch import launch
-from pathlib import Path
-import wandb
-
-import sculpting
 
 
 def main_worker(cfg):
     cfg = default_setup(cfg)
-
-    if (cfg.weight) and (not Path(cfg.weight).is_file()):
-        download = wandb.Api().artifact(cfg.weight).download()
-        cfg.weight = next(Path(download).glob("*.pth"))
-
-    tester = TESTERS.build(dict(type=cfg.test.type, cfg=cfg))
+    test_cfg = dict(cfg=cfg, **cfg.test)
+    tester = TESTERS.build(test_cfg)
     tester.test()
 
 
