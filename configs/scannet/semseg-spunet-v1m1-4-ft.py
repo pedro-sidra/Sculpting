@@ -1,7 +1,8 @@
 _base_ = ["../_base_/default_runtime.py"]
 
 # misc custom setting
-batch_size = 48  # bs: total bs in all gpus
+batch_size = 24  # bs: total bs in all gpus
+num_worker = 24
 mix_prob = 0.8
 empty_cache = False
 enable_amp = True
@@ -21,7 +22,13 @@ model = dict(
 
 # scheduler settings
 epoch = 800
-optimizer = dict(type="SGD", lr=0.05, momentum=0.9, weight_decay=0.0001, nesterov=True)
+optimizer = dict(
+    type="SGD",
+    lr=0.05 * (batch_size / 48),
+    momentum=0.9,
+    weight_decay=0.0001,
+    nesterov=True,
+)
 scheduler = dict(
     type="OneCycleLR",
     max_lr=optimizer["lr"],
@@ -109,21 +116,20 @@ data = dict(
         data_root=data_root,
         transform=[
             dict(type="CenterShift", apply_z=True),
-            dict(type="Copy", keys_dict={"segment": "origin_segment"}),
             dict(
                 type="GridSample",
                 grid_size=0.02,
                 hash_type="fnv",
                 mode="train",
                 return_grid_coord=True,
-                return_inverse=True,
             ),
+            # dict(type="SphereCrop", point_max=1000000, mode="center"),
             dict(type="CenterShift", apply_z=False),
             dict(type="NormalizeColor"),
             dict(type="ToTensor"),
             dict(
                 type="Collect",
-                keys=("coord", "grid_coord", "segment", "origin_segment", "inverse"),
+                keys=("coord", "grid_coord", "segment"),
                 feat_keys=("color", "normal"),
             ),
         ],
