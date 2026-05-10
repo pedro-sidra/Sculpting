@@ -4,28 +4,25 @@ services:
   dev:
     container_name: pointcept-dev
     hostname: pointcept-dev
-    image: pedrosidra0/pointcept:v4.1
+    image: freitas-pointcept:latest
     entrypoint: "./docker-entrypoint.sh"
     command: "bash"
-    working_dir: /workspaces/Pointcept
+    working_dir: /workspaces/Sculpting
     network_mode: host
     environment: 
       - TERM=xterm-256color
-      - GLOO_SOCKET_IFNAME=enp4s0 
-      - NCCL_SOCKET_IFNAME=enp4s0
-      - SLURM_NODELIST 
-      - SLURM_NODEID  
-      - DIST_URL
-      - WORLD_SIZE  
-      - MASTER_PORT  
-      - MASTER_ADDR
+      # - GLOO_SOCKET_IFNAME=enp4s0 
+      # - NCCL_SOCKET_IFNAME=enp4s0
+      # - SLURM_NODELIST 
+      # - SLURM_NODEID  
+      # - DIST_URL
+      # - WORLD_SIZE  
+      # - MASTER_PORT  
+      # - MASTER_ADDR
     volumes:
-      - .:/workspaces/Pointcept
+      - .:/workspaces/Sculpting
       - $HOME/.netrc:/root/.netrc
       - $HOME/.bash_history:/root/.bash_history
-      - $HOME/Pointcept:/workspaces/Pointcept
-      - $SCRATCH/exp:/workspaces/Pointcept/exp 
-      - $SCRATCH/data/scannet:/workspaces/Pointcept/data/scannet
     shm_size: "32gb"
     privileged: false
     stdin_open: true # docker run -i
@@ -35,5 +32,5 @@ services:
         reservations:
           devices:
             - driver: nvidia
-              count: 1
+              count: 2
               capabilities: [gpu]
