@@ -5,7 +5,7 @@ import torch
 from pointcept.models.builder import MODELS
 
 
-@MODELS.register_module("PT-v3m3")
+@MODELS.register_module()
 class PointTransformerV3_Upcasting(PointTransformerV3):
     def __init__(
         self,
