@@ -237,12 +237,18 @@ class SculptingMaskOcclude(object):
         mask_ratio=0.5,
         cell_size=0.02,
         density_factor=0.1,
+        npoint_frac=None,
+        random_sizes=False,
+        min_mask_size=0.1,
     ):
         self.enable_feat_masking = enable_feat_masking
         self.mask_size = mask_size
         self.mask_ratio = mask_ratio
         self.cell_size = cell_size
         self.density_factor = density_factor
+        self.npoint_frac = npoint_frac
+        self.random_sizes = random_sizes
+        self.min_mask_size = min_mask_size
 
     def hash(self, arr):
         """
@@ -265,9 +271,11 @@ class SculptingMaskOcclude(object):
         coord,
     ):
         # Ratio of masked voxels
-        MASK_RATIO = self.mask_ratio
         # Size of each masked voxel
-        MASK_SIZE = self.mask_size
+        if self.random_sizes:
+            MASK_SIZE = self.min_mask_size + np.random.rand() * (self.mask_size - self.min_mask_size)
+        else:
+            MASK_SIZE = self.mask_size
         # Size of each point in the cube-grid for sculpting
         SCULPT_CELL_SIZE = self.cell_size
         SCULPT_CELL_DENSITY = self.density_factor
@@ -285,7 +293,14 @@ class SculptingMaskOcclude(object):
 
         # Pick cells for masking
         ncells = unique_cells.shape[0]
-        ncubes = int(ncells * MASK_RATIO)
+
+        if self.npoint_frac is None:
+            ncubes = int(ncells * self.mask_ratio)
+        else:
+            ncubes = int(len(coord) * self.npoint_frac)
+
+        ncubes = max(ncubes,1)
+
         picked_cells = np.random.randint(low=0, high=ncells, size=(ncubes,))
 
         # Voxel coordinates of picked cells
@@ -325,6 +340,8 @@ class SculptingMaskOcclude(object):
         # Will be passed through SonataLikeSculptor.before_train
         self.mask_ratio = data_dict.get("mask_ratio", self.mask_ratio)
         self.mask_size = data_dict.get("mask_size", self.mask_size)
+
+        #self.mask_size = data_dict.get("mask_size", self.mask_size)
 
         cubes, mask = self.get_sculpting_blocks_and_mask(xyz)
 
