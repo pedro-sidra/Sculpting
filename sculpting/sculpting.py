@@ -1,5 +1,6 @@
 import numpy as np
 import torch
+from .trimming import get_perlin_noise_on_pts
 from .sculpting_ops import (
     add_random_cubes,
     get_random_cubes_random_sampled_point_references,
@@ -9,13 +10,28 @@ from .sculpting_ops import (
     array_choice,
     get_pointgrid,
 )
+from .trimming import get_perlin
 from copy import deepcopy
 
 import pointcept.datasets.transform as transform
 from pointcept.utils.registry import Registry
 from pointcept.datasets.transform import TRANSFORMS
 
-# TRANSFORMS = Registry("transforms")
+@TRANSFORMS.register_module()
+class RandomColorDrop(object):
+    def __init__(self, p=0.2, color_augment=0.0):
+        self.p = p
+        self.color_augment = color_augment
+
+    def __call__(self, data_dict):
+        if "color" in data_dict.keys() and np.random.rand() < self.p:
+            data_dict["color"] *= self.color_augment
+        return data_dict
+
+    def __repr__(self):
+        return "RandomColorDrop(color_augment: {}, p: {})".format(
+            self.color_augment, self.p
+        )
 
 
 @TRANSFORMS.register_module()
@@ -228,10 +244,22 @@ class SculptingOcclude(object):
         return data_dict
 
 
+def get_sculpting_block(num_cells, cell_size):
+    return (
+        get_pointgrid(int(num_cells)) * cell_size
+    )
+
+def get_trimming_block(num_cells, cell_size):
+    return get_perlin( 
+        noise_num_cells=np.ones(3)*2*(int(num_cells)//2),
+        noise_cell_size=cell_size
+    ).T
+
 @TRANSFORMS.register_module()
-class SculptingMaskOcclude(object):
+class AdditiveMaskOcclude(object):
     def __init__(
         self,
+        mode="Sculpting", # "Sculpting" or "Trimming"
         enable_feat_masking=True,
         mask_size=0.2,
         mask_ratio=0.5,
@@ -241,6 +269,12 @@ class SculptingMaskOcclude(object):
         random_sizes=False,
         min_mask_size=0.1,
     ):
+        self.mode=mode
+        if mode.lower().startswith("t"): # Trimming
+            self.get_mask=get_trimming_block
+        else: # Sculpting
+            self.get_mask=get_sculpting_block
+
         self.enable_feat_masking = enable_feat_masking
         self.mask_size = mask_size
         self.mask_ratio = mask_ratio
@@ -269,6 +303,7 @@ class SculptingMaskOcclude(object):
     def get_sculpting_blocks_and_mask(
         self,
         coord,
+        feat
     ):
         # Ratio of masked voxels
         # Size of each masked voxel
@@ -285,11 +320,9 @@ class SculptingMaskOcclude(object):
         grid_coord = ((coord - min_coord) // MASK_SIZE).astype(np.int32)
 
         # get voxel ids(torch impl)
-        unique_cells, clusters = torch.unique(
-            torch.tensor(grid_coord), dim=0, return_inverse=True
+        unique_cells, clusters, count = torch.unique(
+            torch.tensor(grid_coord), dim=0, return_inverse=True, return_counts=True
         )
-        unique_cells=unique_cells.numpy()
-        clusters=clusters.numpy()
 
         # Pick cells for masking
         ncells = unique_cells.shape[0]
@@ -306,22 +339,30 @@ class SculptingMaskOcclude(object):
         # Voxel coordinates of picked cells
         p0s = unique_cells[picked_cells]
         p0s = (
-            p0s * MASK_SIZE + min_coord  # cell coordinates  # min_coord per batch index
+            p0s * MASK_SIZE + min_coord
         )
+        first_point_idx = np.cumsum(np.insert(count, 0, 0)[0:-1])
 
         # Place cubes at each picked cell
-        c = get_pointgrid(int(MASK_SIZE // SCULPT_CELL_SIZE)) * SCULPT_CELL_SIZE
-        # trick to do outer addition with broadcasting
-        offsetted = p0s[None, ...] + c[:, None, :]
-        offsetted = offsetted.reshape(-1, 3)
+        _cube_coords = []
+        _cube_feats = []
+        for i, cell in enumerate(picked_cells):
+            cube_coords = self.get_mask( 
+                num_cells=MASK_SIZE // SCULPT_CELL_SIZE,
+                cell_size=SCULPT_CELL_SIZE
+            )
+            # trick to do outer addition with broadcasting
+            cube_coords = p0s[i] + cube_coords
+            point_feat=feat[first_point_idx[i]]
+            cube_feats = point_feat * np.ones((len(cube_coords),point_feat.shape[0]))
 
-        # subsample cubes randomly
-        rand_picks = np.arange(0, len(offsetted))
-        np.random.shuffle(rand_picks)
-        offsetted = offsetted[rand_picks[: int(SCULPT_CELL_DENSITY * len(offsetted))]]
+            _cube_coords.append(cube_coords)
+            _cube_feats.append(cube_feats)
 
+        cube_coords = np.vstack(_cube_coords)
+        cube_feats = np.vstack(_cube_feats)
         mask = np.isin(clusters, picked_cells).astype(int)
-        return offsetted, mask
+        return cube_coords, cube_feats, mask
 
     def get_random_colors(self, size, low=0, high=255):
         return np.random.randint(low, high, size).astype(np.float32)
@@ -343,17 +384,17 @@ class SculptingMaskOcclude(object):
 
         #self.mask_size = data_dict.get("mask_size", self.mask_size)
 
-        cubes, mask = self.get_sculpting_blocks_and_mask(xyz)
+        cube_coords, cube_feats, mask = self.get_sculpting_blocks_and_mask(xyz, rgb)
 
         # mask will be 0 for original points, 1 for sculpted points, 2 for masked points
-        mask = np.hstack((mask * 2, torch.full((len(cubes),), 1))).astype(np.int32)
+        mask = np.hstack((mask * 2, torch.full((len(cube_coords),), 1))).astype(np.int32)
 
-        xyz = np.vstack([xyz, cubes])
+        xyz = np.vstack([xyz, cube_coords])
 
-        rgb = np.vstack([rgb, 0.0 * self.get_random_colors(cubes.shape)])
+        rgb = np.vstack([rgb, cube_feats])
 
         if normal is not None:
-            rand_normals = self.get_random_normals(cubes.shape)
+            rand_normals = self.get_random_normals(cube_coords.shape)
             normal = np.vstack([normal, 0.0 * rand_normals])
 
         if self.enable_feat_masking:
@@ -368,3 +409,57 @@ class SculptingMaskOcclude(object):
         data_dict.pop("instance")
 
         return data_dict
+
+@TRANSFORMS.register_module()
+class TrimmingOcclude(SculptingOcclude):
+    def add_random_cubes(self, data_dict):
+        xyz = data_dict["coord"]
+        rgb = data_dict.get("color", self.get_random_colors(xyz.shape))
+        normal = data_dict.get("normal", self.get_random_normals(xyz.shape))
+
+        semantic_label = data_dict.get("segment", np.ones(len(xyz), dtype=int))
+
+        if self.npoints is None:
+            ncubes = int(self.npoint_frac * len(xyz))
+        else:
+            ncubes = self.npoints
+
+        cubes, cube_feats = get_perlin_noise_on_pts(
+            self.cube_size_min,
+            self.cube_size_max,
+            xyz,
+            feats=rgb,
+            npoints=ncubes,
+            cell_size=self.cell_size,
+            actual_cube=False,
+            sphere=False,
+            point_sampling=self.sampling,
+            density_factor=self.density_factor,
+        )
+
+        xyz = np.vstack([xyz, cubes])
+
+        # rand_colors = self.get_random_colors(cubes.shape)
+        rgb = np.vstack([rgb, cube_feats])
+
+        if normal is not None:
+            rand_normals = self.get_random_normals(cubes.shape)
+            normal = np.vstack([normal, rand_normals])
+
+        # Randomly turn colors off
+        # if np.random.rand() < self.kill_color_proba:
+        #     rgb = rgb * 0.0 + np.random.rand() * 255
+
+        dummy_cube = np.ones(len(cubes), dtype=np.int32)
+        dummy_pc = np.ones_like(semantic_label, dtype=np.int32)
+
+        semantic_label = np.hstack([dummy_pc, 0 * dummy_cube])
+        instance_label = np.hstack([-1 * dummy_pc, -1 * dummy_cube])
+
+        return (
+            xyz.astype(np.float32),
+            rgb.astype(np.float32),
+            semantic_label.astype(np.int32),
+            normal.astype(np.float32),
+            instance_label.astype(np.int32),
+        )
