@@ -39,8 +39,6 @@ colors={
 for s in np.unique(b['segment']):
     seg_color[b['segment']==s] = colors.get(s, [0,0,0])
 
-breakpoint()
-
 pandas_to_pypcd(
     pd.DataFrame(dict(
     x=coord[:,0],
@@ -49,6 +47,16 @@ pandas_to_pypcd(
     red=seg_color[:,0]*255,
     green=seg_color[:,1]*255,
     blue=seg_color[:,2]*255,
-    label=b['segment'],
     ))
 ).save("sample_seg.pcd")
+
+pandas_to_pypcd(
+    pd.DataFrame(dict(
+    x=coord[:,0],
+    y=coord[:,1],
+    z=coord[:,2],
+    red=c[:,0]*255,
+    green=c[:,1]*255,
+    blue=c[:,2]*255,
+    ))
+).save("sample_rgb.pcd")

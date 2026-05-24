@@ -21,6 +21,33 @@ sculpting_data_base_configs = dict(
         "masked",
     ],
 )
+voxelize_transform = dict(
+    type="VoxelizeAgg",
+    grid_size=0.02,
+    hash_type="fnv",
+    mode="train",
+    return_grid_coord=True,
+    how_to_agg_feats=dict(
+        coord="mean",
+        color="mean",
+        segment="rand_choice",
+        normal="first",
+    ),
+)
+update_index_keys = dict(
+    type="Update",
+    keys_dict={
+        "index_valid_keys": [
+            "coord",
+            "grid_coord",
+            "color",
+            "normal",
+            "superpoint",
+            "strength",
+            "segment",
+        ]
+    },
+)
 
 # dataset settings
 dataset_type = "ScanNetDataset"
