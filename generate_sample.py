@@ -12,7 +12,7 @@ import sys
 config_file = sys.argv[1]
 
 args = default_argument_parser().parse_args(
-    f"--config-file {config_file} --num-gpus 0 --options num_workers=0 num_worker_per_gpu=0 batch_size=1".split()
+    f"--config-file {config_file} --num-gpus 0 --options num_workers=0 num_worker_per_gpu=0 batch_size=2".split()
 )
 cfg = default_config_parser(args.config_file, args.options)
 
@@ -26,16 +26,29 @@ i, b = next(enumerate(train_loader))
 b
 
 import pandas as pd
+from pypcd.pypcd import pandas_to_pypcd
 
 c = (1+b['feat'])/2
 coord=b['coord']
+seg_color=np.zeros_like(coord)
+colors={
+    0: [1,0,0],
+    1: [0,1,0],
+    2: [0,0,1],
+}
+for s in np.unique(b['segment']):
+    seg_color[b['segment']==s] = colors.get(s, [0,0,0])
 
-pd.DataFrame(dict(
+breakpoint()
+
+pandas_to_pypcd(
+    pd.DataFrame(dict(
     x=coord[:,0],
     y=coord[:,1],
     z=coord[:,2],
-    red=c[:,0]*255,
-    green=c[:,1]*255,
-    blue=c[:,2]*255,
-    label=b['segment']
-)).to_csv("test.csv")
+    red=seg_color[:,0]*255,
+    green=seg_color[:,1]*255,
+    blue=seg_color[:,2]*255,
+    label=b['segment'],
+    ))
+).save("sample_seg.pcd")
