@@ -3,6 +3,8 @@ resume = False  # whether to resume training process
 evaluate = True  # evaluate after each epoch training process
 test_only = False  # test process
 
+pin_memory=True
+
 enable_wandb=False
 
 seed = None  # train process will init a random seed and record
@@ -39,7 +41,7 @@ hooks = [
 ]
 
 # Trainer
-train = dict(type="DefaultTrainer")
+train = dict(type="SidraTrainer")
 
 # Tester
 test = dict(type="SemSegTester", verbose=True)
