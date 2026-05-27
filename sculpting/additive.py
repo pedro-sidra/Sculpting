@@ -60,11 +60,17 @@ class AdditiveMasking(object):
         
 
     def balance_npoint_frac(self, current_ncells_min, current_ncells_max):
+
+        if self.mode.lower().startswith("t"):
+            actual_density_factor=0.15
+        else:
+            actual_density_factor=self.density_factor
+
         if self.sampling.startswith("c"): # chessboard
             # assert current_ncells_min == current_ncells_max, "For chessboard sampling, block size should be fixed."
-            self.npoint_frac=1/(self.density_factor * current_ncells_min**3)
+            self.npoint_frac=1/(actual_density_factor * current_ncells_min**3)
         else: # random or random_rotate
-            self.npoint_frac=8/(self.density_factor * (current_ncells_max+current_ncells_min+1)**3)
+            self.npoint_frac=8/(actual_density_factor * (current_ncells_max+current_ncells_min+1)**3)
 
     def __call__(self, data_dict):
         """
