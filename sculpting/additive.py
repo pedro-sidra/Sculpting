@@ -62,7 +62,7 @@ class AdditiveMasking(object):
     def balance_npoint_frac(self, current_ncells_min, current_ncells_max):
         if self.sampling.startswith("c"): # chessboard
             # assert current_ncells_min == current_ncells_max, "For chessboard sampling, block size should be fixed."
-            self.npoint_frac=1/(self.density_factor * current_ncells_min**3)
+            self.npoint_frac=1/(self.density_factor * current_ncells_max**3)
         else: # random or random_rotate
             self.npoint_frac=8/(self.density_factor * (current_ncells_max+current_ncells_min+1)**3)
 
@@ -73,6 +73,8 @@ class AdditiveMasking(object):
         coord = data_dict["coord"]
         color = data_dict.get("color", None)
         normal = data_dict.get("normal", None)
+
+        self.mask_size_max = data_dict.get("mask_size", self.mask_size)
 
         self.balance_npoint_frac(
             current_ncells_min=int(self.mask_size_min // self.cell_size),
