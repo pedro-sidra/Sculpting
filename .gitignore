@@ -24,3 +24,4 @@ artifacts/
 artifacts/
 slurm/
 *.pcd
+run_data/
