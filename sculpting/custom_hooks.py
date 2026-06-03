@@ -114,7 +114,7 @@ class CheckpointSaverWandb(CheckpointSaver):
 
 
 @HOOKS.register_module()
-class MaskSizeScheduler(HookBase):
+class OldMaskSizeScheduler(HookBase):
     def __init__(
         self,
         mask_size_start=0.1,

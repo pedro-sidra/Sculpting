@@ -4,6 +4,8 @@ from scipy.spatial.transform import Rotation as R
 from .sculpting_ops import  get_pointgrid
 from .trimming import get_perlin
 
+from pointcept.engines.hooks import HOOKS, HookBase
+from pointcept.utils.scheduler import CosineScheduler
 from pointcept.datasets.transform import TRANSFORMS
 
 def get_sculpting_block(num_cells, cell_size):
@@ -16,6 +18,114 @@ def get_trimming_block(num_cells, cell_size):
         noise_cell_size=cell_size,
     ).T
 
+@HOOKS.register_module()
+class AdditiveMaskSizeScheduler(HookBase):
+    def __init__(
+        self,
+        mask_size_start=0.1,
+        mask_size_end=0.1,
+        mask_size_base=0.4,
+        mask_size_warmup_ratio=0.05,
+        mask_ratio_start=0.3,
+        mask_ratio_end=0.1,
+        mask_ratio_base=0.7,
+        mask_ratio_warmup_ratio=0.05,
+    ):
+        # masking and scheduler
+        self.mask_size_start = mask_size_start
+        self.mask_size_end = mask_size_end
+        self.mask_size_base = mask_size_base
+        self.mask_size_warmup_ratio = mask_size_warmup_ratio
+        self.mask_size_scheduler = None
+        
+        self.mask_ratio_start = mask_ratio_start
+        self.mask_ratio_end = mask_ratio_end
+        self.mask_ratio_base = mask_ratio_base
+        self.mask_ratio_warmup_ratio = mask_ratio_warmup_ratio
+        self.mask_ratio_scheduler = None
+
+    def find_additive_masking(self, transform):
+        """Recursively search for the AdditiveMasking transform inside Pointcept's Compose object."""
+        if isinstance(transform, AdditiveMasking):
+            return transform
+        if hasattr(transform, "transforms"):
+            for t in transform.transforms:
+                res = self.find_additive_masking(t)
+                if res is not None:
+                    return res
+        return None
+
+    def before_train(self):
+        total_steps = self.trainer.cfg.scheduler.total_steps
+        curr_step = self.trainer.start_epoch * len(self.trainer.train_loader)
+        
+        # 1. Main process mirror schedulers (used exclusively for Tensorboard logging)
+        self.mask_size_scheduler = CosineScheduler(
+            start_value=self.mask_size_start,
+            base_value=self.mask_size_base,
+            final_value=self.mask_size_end,
+            warmup_iters=int(total_steps * self.mask_size_warmup_ratio),
+            total_iters=total_steps,
+        )
+        self.mask_size_scheduler.iter = curr_step
+
+        self.mask_ratio_scheduler = CosineScheduler(
+            start_value=self.mask_ratio_start,
+            base_value=self.mask_ratio_base,
+            final_value=self.mask_ratio_end,
+            warmup_iters=int(total_steps * self.mask_ratio_warmup_ratio),
+            total_iters=total_steps,
+        )
+        self.mask_ratio_scheduler.iter = curr_step
+
+        # 2. Worker schedulers (injected into the transform before DataLoader workers spawn)
+        dataset = self.trainer.train_loader.dataset
+        transform = self.find_additive_masking(dataset.transform)
+        
+        if transform is not None:
+            batch_size = getattr(self.trainer.train_loader, "batch_size", 1)
+            num_workers = max(1, getattr(self.trainer.train_loader, "num_workers", 1))
+            
+            # Workers process 1 sample at a time. This calculates the total samples each worker will handle.
+            samples_per_step_per_worker = batch_size / num_workers
+            worker_total_iters = int(total_steps * samples_per_step_per_worker)
+            worker_curr_iter = int(curr_step * samples_per_step_per_worker)
+
+            transform.mask_size_scheduler = CosineScheduler(
+                start_value=self.mask_size_start,
+                base_value=self.mask_size_base,
+                final_value=self.mask_size_end,
+                warmup_iters=int(worker_total_iters * self.mask_size_warmup_ratio),
+                total_iters=worker_total_iters,
+            )
+            transform.mask_size_scheduler.iter = worker_curr_iter
+            
+            transform.mask_ratio_scheduler = CosineScheduler(
+                start_value=self.mask_ratio_start,
+                base_value=self.mask_ratio_base,
+                final_value=self.mask_ratio_end,
+                warmup_iters=int(worker_total_iters * self.mask_ratio_warmup_ratio),
+                total_iters=worker_total_iters,
+            )
+            transform.mask_ratio_scheduler.iter = worker_curr_iter
+
+    def before_step(self):
+        # We step the main process logging schedulers. 
+        # Since workers advance their own schedulers locally, we don't need to push this down!
+        mask_size = self.mask_size_scheduler.step()
+        mask_ratio = self.mask_ratio_scheduler.step()
+
+        if self.trainer.writer is not None:
+            self.trainer.writer.add_scalar(
+                "params/mask_size",
+                mask_size,
+                self.mask_size_scheduler.iter,
+            )
+            self.trainer.writer.add_scalar(
+                "params/mask_ratio",
+                mask_ratio,
+                self.mask_ratio_scheduler.iter,
+            )
 
 @TRANSFORMS.register_module()
 class AdditiveMasking(object):
@@ -37,6 +147,8 @@ class AdditiveMasking(object):
         mask_size_max=0.5,
         cell_size=0.02,
         density_factor=0.1,
+        mask_dictname="segment",
+        mask_ratio=1
     ):
         self.mode = mode
         self.sampling = sampling
@@ -45,6 +157,12 @@ class AdditiveMasking(object):
         self.mask_size_max = mask_size_max
         self.cell_size = cell_size
         self.density_factor = density_factor
+        self.mask_dictname = mask_dictname
+        self.mask_ratio = mask_ratio
+
+        # Schedulers are safely injected by MaskSizeScheduler hook right before DataLoader spawning
+        self.mask_size_scheduler = None
+        self.mask_ratio_scheduler = None
 
         if mode.lower().startswith("t"):
             self.get_mask = get_trimming_block
@@ -55,22 +173,17 @@ class AdditiveMasking(object):
         if self.sampling.startswith("c"): # chessboard
             # For chessboard sampling, we want a fixed block size
             self.mask_size_min = mask_size_max 
-        else:
-            pass
-        
 
     def balance_npoint_frac(self, current_ncells_min, current_ncells_max):
-
         if self.mode.lower().startswith("t"):
             actual_density_factor=0.15
         else:
             actual_density_factor=self.density_factor
 
         if self.sampling.startswith("c"): # chessboard
-            # assert current_ncells_min == current_ncells_max, "For chessboard sampling, block size should be fixed."
-            self.npoint_frac=1/(actual_density_factor * current_ncells_max**3)
+            self.npoint_frac=self.mask_ratio/(actual_density_factor * max(1, current_ncells_max**3))
         else: # random or random_rotate
-            self.npoint_frac=8/(actual_density_factor * (current_ncells_max+current_ncells_min+1)**3)
+            self.npoint_frac=self.mask_ratio*8/(actual_density_factor * max(1, (current_ncells_max+current_ncells_min+1)**3))
 
     def __call__(self, data_dict):
         """
@@ -80,7 +193,15 @@ class AdditiveMasking(object):
         color = data_dict.get("color", None)
         normal = data_dict.get("normal", None)
 
-        self.mask_size_max = data_dict.get("mask_size", self.mask_size_max)
+        # --- INDEPENDENT WORKER SCHEDULING ---
+        # The worker tracks how many individual point clouds it processes and updates itself seamlessly.
+        if self.mask_size_scheduler is not None:
+            self.mask_size_max = self.mask_size_scheduler.step()
+        if self.mask_ratio_scheduler is not None:
+            self.mask_ratio = self.mask_ratio_scheduler.step()
+
+        if self.sampling.startswith("c"):
+            self.mask_size_min = self.mask_size_max
 
         self.balance_npoint_frac(
             current_ncells_min=int(self.mask_size_min // self.cell_size),
@@ -130,7 +251,6 @@ class AdditiveMasking(object):
         _block_coords = []
         _block_colors = []
         _block_normals = []
-
         cached_blocks = {}
 
         for i in range(K):
@@ -211,12 +331,12 @@ class AdditiveMasking(object):
                 
             # 4. Set labels of added blocks to 1
             final_mask = np.hstack([orig_mask, np.ones(len(block_coords), dtype=np.int32)])
-            data_dict["segment"] = final_mask
+            data_dict[self.mask_dictname] = final_mask
             
             # Pass mask_balance via data_dict for Pointcept's main writer to log safely
             data_dict["mask_balance"] = float(mask_balance)
         else:
-            data_dict["segment"] = orig_mask
+            data_dict[self.mask_dictname] = orig_mask
             data_dict["mask_balance"] = 0.0
 
         return data_dict

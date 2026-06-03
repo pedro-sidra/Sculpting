@@ -13,7 +13,6 @@ import torch.nn as nn
 import torch.nn.functional as F
 import torch.distributed as dist
 import torch_scatter
-from timm.layers import trunc_normal_
 
 import pointops
 from pointcept.models.sonata.sonata_v1m1_base import Sonata, OnlineCluster
@@ -59,9 +58,6 @@ class SonataLikeSculptor(Sonata):
         match_max_k=8,
         match_max_r=0.08,
         up_cast_level=2,
-        # Sculpting
-        sculpt_loss_weight=4 / 12,
-        reconstruct_loss_weight=4 / 12,
     ):
         super(Sonata, self).__init__()
         # Sonata stuff
@@ -141,32 +137,10 @@ class SonataLikeSculptor(Sonata):
             student_model_dict["unmask_head"] = head()
             teacher_model_dict["unmask_head"] = head()
 
-        # Sculpting additions
+        # Sculpting additions (Mask Token)
         features_to_reconstruct = backbone["in_channels"]
-        self.sculpt_loss_weight = sculpt_loss_weight
-        self.mask_token = nn.Parameter(torch.zeros(1, features_to_reconstruct ))
+        self.mask_token = nn.Parameter(torch.zeros(1, features_to_reconstruct))
         trunc_normal_(self.mask_token, mean=0.0, std=0.02)
-
-        student_model_dict["sculpt_head"] = nn.Sequential(
-            nn.Linear(head_in_channels, head_hidden_channels),
-            nn.GELU(),
-            nn.Linear(head_hidden_channels, 2),
-        )
-        teacher_model_dict["sculpt_head"] = nn.Sequential(
-            nn.Linear(head_in_channels, head_hidden_channels),
-            nn.GELU(),
-            nn.Linear(head_hidden_channels, 2),
-        )
-        student_model_dict["reconstruct_head"] = nn.Sequential(
-            nn.Linear(head_in_channels, head_hidden_channels),
-            nn.GELU(),
-            nn.Linear(head_hidden_channels, features_to_reconstruct),
-        )
-        teacher_model_dict["reconstruct_head"] = nn.Sequential(
-            nn.Linear(head_in_channels, head_hidden_channels),
-            nn.GELU(),
-            nn.Linear(head_hidden_channels, features_to_reconstruct),
-        )
 
         # Sonata stuff
         self.student = nn.ModuleDict(student_model_dict)
@@ -196,7 +170,6 @@ class SonataLikeSculptor(Sonata):
         # prepare global_point, mask_global_point, local_point
         with torch.no_grad():
             # global_point & masking
-
             feat = data_dict["global_feat"]
             mask = data_dict["global_mask"]
             coord = data_dict["global_coord"]
@@ -216,39 +189,40 @@ class SonataLikeSculptor(Sonata):
                 mask=mask[clean_indexes],
             )
 
-            gt_noblock = global_point.feat
-
-            masked_feats = feat.clone()
-            masked_feats[mask != 0] = self.mask_token  # zero-out when masked or cube
-
-            mask_global_point = Point(
-                feat=masked_feats,
-                coord=coord,
-                origin_coord=origin_coord,
-                offset=data_dict["global_offset"],
-                grid_size=grid_size,
-                mask=mask,  # masked points
-            )
-
             # local point & matching
-            clean_indexes = data_dict["local_mask"] != 1  # not blocks
+            clean_indexes_local = data_dict["local_mask"] != 1  # not blocks
             local_point = Point(
-                feat=data_dict["local_feat"][clean_indexes],
-                mask=data_dict["local_mask"][clean_indexes],
-                coord=data_dict["local_coord"][clean_indexes],
-                origin_coord=data_dict["local_origin_coord"][clean_indexes],
+                feat=data_dict["local_feat"][clean_indexes_local],
+                mask=data_dict["local_mask"][clean_indexes_local],
+                coord=data_dict["local_coord"][clean_indexes_local],
+                origin_coord=data_dict["local_origin_coord"][clean_indexes_local],
                 offset=batch2offset(
-                    offset2batch(data_dict["local_offset"])[clean_indexes]
+                    offset2batch(data_dict["local_offset"])[clean_indexes_local]
                 ),
                 grid_size=data_dict["grid_size"][0],
             )
 
             # create result dictionary for return
             result_dict = dict(loss=[])
+            
             # teacher backbone forward (shared with mask and unmask)
             global_point_ = self.teacher.backbone(global_point)
             global_point_ = self.up_cast(global_point_)
             global_feat = global_point_.feat
+
+        # --- FIX: Apply mask_token OUTSIDE of torch.no_grad() ---
+        # By doing this outside, Autograd successfully links self.mask_token to the computation graph.
+        masked_feats = data_dict["global_feat"].clone()
+        masked_feats[data_dict["global_mask"] != 0] = self.mask_token.to(masked_feats.dtype)  # zero-out when masked or cube
+
+        mask_global_point = Point(
+            feat=masked_feats,
+            coord=data_dict["global_coord"],
+            origin_coord=data_dict["global_origin_coord"],
+            offset=data_dict["global_offset"],
+            grid_size=data_dict["grid_size"][0],
+            mask=data_dict["global_mask"],  # masked points
+        )
 
         # Local
         if self.unmask_loss_weight > 0:
@@ -296,31 +270,14 @@ class SonataLikeSculptor(Sonata):
         if (
             self.mask_loss_weight > 0
             or self.roll_mask_loss_weight > 0
-            or self.sculpt_loss_weight > 0
         ):
             # teacher head forward
             with torch.no_grad():
                 global_point_.feat = self.teacher.mask_head(global_feat)
+            
             # student forward
             mask_global_point_ = self.student.backbone(mask_global_point)
             mask_global_point_ = self.up_cast(mask_global_point_)
-
-            if self.sculpt_loss_weight > 0:
-                # teacher head forward
-                sculpt_pred = self.student.sculpt_head(mask_global_point_.feat)
-
-                # predictions outside of sculpting blocks
-                pred_noblock = sculpt_pred[mask_global_point.mask != 1]
-                # predictions of sculpting blocks
-                pred_block = sculpt_pred[mask_global_point.mask == 1]
-
-                sculpt_loss = (
-                    torch.sum((pred_noblock - gt_noblock) ** 2)
-                    + torch.sum((pred_block - 0) ** 2)
-                ) / (pred_noblock.shape[0] + pred_block.shape[0])
-
-                result_dict["sculpt_loss"] = sculpt_loss
-                result_dict["loss"].append(sculpt_loss * self.sculpt_loss_weight)
 
             if self.mask_loss_weight > 0 or self.roll_mask_loss_weight > 0:
                 mask_pred_sim = self.student.mask_head(mask_global_point_.feat)
@@ -388,7 +345,8 @@ class SonataLikeSculptor(Sonata):
 
         result_dict["loss"] = sum(result_dict["loss"])
 
-        if get_world_size() > 1:
-            for loss in result_dict.values():
-                dist.all_reduce(loss, op=dist.ReduceOp.AVG)
+        # Removed the `dist.all_reduce` loop here. 
+        # PyTorch DDP will automatically handle syncing gradients for the `loss` tensor.
+        # Pointcept's training engine will automatically handle averaging the loss scalars for logging.
+
         return result_dict

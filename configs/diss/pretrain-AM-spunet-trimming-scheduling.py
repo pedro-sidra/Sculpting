@@ -1,7 +1,7 @@
-_base_ = ["pretrain-AM-spunet-base.py"]
+_base_ = ["../_base_/default_runtime.py"]
 
 # misc custom setting
-batch_size = 96  # bs: total bs in all gpus
+batch_size = 32  # bs: total bs in all gpus
 num_worker = 32
 mix_prob = 0
 empty_cache = False
@@ -10,15 +10,15 @@ amp_dtype = "bfloat16"
 evaluate = True
 find_unused_parameters = False
 
-base_lr = 0.004
-optimizer = dict(type="AdamW", lr=base_lr)
+epoch=500
+eval_epoch=100
 
 
 hooks = [
     dict(type="CheckpointLoaderAllowMismatch"),
     dict(type="IterationTimer", warmup_iter=2),
     dict(type="InformationWriter"),
-    dict(type="MaskSizeScheduler",
+    dict(type="AdditiveMaskSizeScheduler",
         mask_size_start=0.1,
         mask_size_base=0.4,
         mask_size_end=0.4,
@@ -37,35 +37,14 @@ hooks = [
 # Sculpting params
 sculpting_transform = dict(
     type="AdditiveMasking",
-    mode="trimming",  # "Sculpting" or "Trimming"
+    mode="Trimming",  # "Sculpting" or "Trimming"
     sampling="chessboard",  # "chessboard" or "random" or "random_rotate"
-    density_factor=1.0,
+    density_factor=1,
     mask_size_min=0.4,
     mask_size_max=0.4,
     cell_size=0.02,
 )
 
-model = dict(
-    type="DefaultSegmentor",
-    backbone=dict(
-        type="SpUNet-v1m1",
-        in_channels=3,
-        num_classes=3,
-        channels=(32, 64, 128, 256, 256, 128, 96, 96),
-        layers=(2, 3, 4, 6, 2, 2, 2, 2),
-    ),
-    criteria=[dict(type="CrossEntropyLoss", loss_weight=1.0, ignore_index=0)],
-)
-
-sculpting_data_base_configs = dict(
-    num_classes=3,
-    ignore_index=0,
-    names=[
-        "original",
-        "occluded",
-        "masked",
-    ],
-)
 voxelize_transform = dict(
     type="VoxelizeAgg",
     grid_size=0.02,
@@ -94,6 +73,54 @@ update_index_keys = dict(
     },
 )
 
+tta_identity = [
+    [dict(type="RandomRotateTargetAngle", angle=[0], axis="z", center=[0, 0, 0], p=1)]
+]
+
+sculpting_data_base_configs = dict(
+    num_classes=3,
+    ignore_index=0,
+    names=[
+        "original",
+        "occluded",
+        "masked",
+    ],
+)
+
+model = dict(
+    type="DefaultSegmentor",
+    backbone=dict(
+        type="SpUNet-v1m1",
+        in_channels=3,
+        num_classes=3,
+        channels=(32, 64, 128, 256, 256, 128, 96, 96),
+        layers=(2, 3, 4, 6, 2, 2, 2, 2),
+    ),
+    criteria=[dict(type="CrossEntropyLoss", loss_weight=1.0, ignore_index=0)],
+)
+
+# optimizer = dict(type="AdamW", lr=0.04, weight_decay=0.04)
+# scheduler = dict(
+#     type="OneCycleLR",
+#     max_lr=optimizer["lr"],
+#     pct_start=0.05,
+#     anneal_strategy="cos",
+#     div_factor=10.0,
+#     final_div_factor=1000.0,
+# )
+
+
+# scheduler settings
+optimizer = dict(type="SGD", lr=0.1, momentum=0.8, weight_decay=0.0001, nesterov=True)
+scheduler = dict(
+    type="OneCycleLR",
+    max_lr=optimizer["lr"],
+    pct_start=0.05,
+    anneal_strategy="cos",
+    div_factor=10.0,
+    final_div_factor=10000.0,
+)
+
 # dataset settings
 dataset_type = "ScanNetDataset"
 data_root = "data/scannet"
@@ -104,20 +131,30 @@ data = dict(
         type=dataset_type,
         split=[
             "train",
+            # "val",
+            # "test",
+            # "arkit",
         ],
         data_root=data_root,
         transform=[
             dict(type="CenterShift", apply_z=True),
+            # dict(
+            #    type="RandomDropout", dropout_ratio=0.2, dropout_application_ratio=0.2
+            # ),
+            # dict(type="RandomRotateTargetAngle", angle=(1/2, 1, 3/2), center=[0, 0, 0], axis="z", p=0.75),
             dict(type="RandomRotate", angle=[-1, 1], axis="z", center=[0, 0, 0], p=1.0),
             dict(type="RandomRotate", angle=[-1 / 64, 1 / 64], axis="x", p=0.2),
             dict(type="RandomRotate", angle=[-1 / 64, 1 / 64], axis="y", p=0.2),
             dict(type="RandomScale", scale=[0.9, 1.1]),
+            # dict(type="RandomShift", shift=[0.2, 0.2, 0.2]),
             dict(type="RandomFlip", p=0.5),
             dict(type="RandomJitter", sigma=0.005, clip=0.02),
+            # dict(type="ElasticDistortion", distortion_params=[[0.2, 0.4], [0.8, 1.6]]),
             dict(type="ChromaticAutoContrast", p=0.2, blend_factor=None),
             dict(type="ChromaticTranslation", p=0.95, ratio=0.05),
             dict(type="ChromaticJitter", p=0.95, std=0.05),
-            dict(type="RandomColorDrop", p=0.2, color_augment=0.0),
+            # dict(type="HueSaturationTranslation", hue_max=0.2, saturation_max=0.2),
+            # dict(type="RandomColorDrop", p=0.2, color_augment=0.0),
             dict(type="SphereCrop", point_max=150000, mode="random"),
             update_index_keys,
             sculpting_transform,
@@ -125,6 +162,7 @@ data = dict(
             dict(type="SphereCrop", point_max=120000, mode="random"),
             dict(type="CenterShift", apply_z=False),
             dict(type="NormalizeColor"),
+            # dict(type="ShufflePoint"),
             dict(type="ToTensor"),
             dict(
                 type="Collect",
@@ -148,6 +186,7 @@ data = dict(
             voxelize_transform,
             dict(type="CenterShift", apply_z=False),
             dict(type="NormalizeColor"),
+            # dict(type="ShufflePoint"),
             dict(type="ToTensor"),
             dict(
                 type="Collect",

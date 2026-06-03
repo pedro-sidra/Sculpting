@@ -1,13 +1,52 @@
-"""
-Default configuration for pretraining a SONATA model
-Dataset: ScanNet v2, ScanNet++, S3DIS, HM3D, ArkitScene, Structured3D
-"""
-
 _base_ = ["../_base_/default_runtime.py"]
 
+# wandb_off = 1
+enable_wandb = False
+
+# Sculpting params
+sculpting_transform = dict(
+    type="AdditiveMasking",
+    mode="trimming",  # "Sculpting" or "Trimming"
+    sampling="chessboard",  # "chessboard" or "random" or "random_rotate"
+    density_factor=1.0,
+    mask_size_min=0.4,
+    mask_size_max=0.4,
+    cell_size=0.02,
+    mask_dictname="mask"
+)
+
+voxelize_transform = dict(
+    type="VoxelizeAgg",
+    grid_size=0.02,
+    hash_type="fnv",
+    mode="train",
+    return_grid_coord=True,
+    how_to_agg_feats=dict(
+        coord="mean",
+        color="mean",
+        normal="first",
+        mask="max",
+    ),
+)
+
+update_index_keys = dict(
+    type="Update",
+    keys_dict={
+        "index_valid_keys": [
+            "coord",
+            "grid_coord",
+            "color",
+            "normal",
+            "mask",
+        ]
+    },
+)
+
+## ===== MODEL DEFINITION
+
 # misc custom setting
-batch_size = 2  # bs: total bs in all gpus
-num_worker = 2
+batch_size = 16  # bs: total bs in all gpus
+num_worker = 16
 mix_prob = 0
 clip_grad = 3.0
 empty_cache = False
@@ -48,7 +87,7 @@ model = dict(
     mask_loss_weight=2 / 12,
     roll_mask_loss_weight=2 / 12,
     unmask_loss_weight=4 / 12,
-    sculpt_loss_weight=4 / 12,
+    # sculpt_loss_weight=4 / 12,
     momentum_base=0.994,
     momentum_final=1,
     match_max_k=8,
@@ -72,46 +111,6 @@ scheduler = dict(
     anneal_strategy="cos",
     div_factor=10.0,
     final_div_factor=10000.0,
-)
-
-# dataset settings
-
-# Sculpting params
-sculpting_transform = dict(
-    type="SculptingMaskOcclude",
-    enable_feat_masking=False,
-    mask_size=0.1,
-    mask_ratio=0.1,
-    cell_size=0.02,
-    density_factor=1.0,
-)
-
-update_index_keys = dict(
-    type="Update",
-    keys_dict={
-        "index_valid_keys": [
-            "coord",
-            "grid_coord",
-            "color",
-            "superpoint",
-            "strength",
-            "segment",
-            "instance",
-        ]
-    },
-)
-
-voxelize_transform = dict(
-    type="VoxelizeAgg",
-    grid_size=0.02,
-    hash_type="fnv",
-    mode="train",
-    return_grid_coord=True,
-    how_to_agg_feats=dict(
-        coord="mean",
-        color="mean",
-        mask="max",
-    ),
 )
 
 transform = [
@@ -217,10 +216,13 @@ data = dict(
 )
 
 hooks = [
-    dict(type="CheckpointLoader"),
+    dict(type="CheckpointLoaderAllowMismatch", strict=False),
+    # dict(type="CheckpointLoader"),
     dict(type="ModelHook"),
     dict(type="WeightDecaySchedular", base_value=base_wd, final_value=final_wd),
     dict(type="IterationTimer", warmup_iter=2),
     dict(type="InformationWriter"),
-    dict(type="CheckpointSaver", save_freq=5),
+    dict(type="CheckpointSaverWandb", save_freq=5),
+    # dict(type="SemSegEvaluator"),
+    # dict(type="PreciseEvaluator", test_last=False),
 ]

@@ -1,5 +1,23 @@
 _base_ = ["pretrain-AM-spunet-base.py"]
 
+hooks = [
+    dict(type="CheckpointLoaderAllowMismatch"),
+    dict(type="IterationTimer", warmup_iter=2),
+    dict(type="InformationWriter"),
+    dict(type="MaskSizeScheduler",
+        mask_size_start=0.1,
+        mask_size_base=0.4,
+        mask_size_warmup_ratio=0.05,
+        mask_ratio_start=0.3,
+        mask_ratio_base=0.7,
+        mask_ratio_warmup_ratio=0.05,
+    ),
+    dict(type="SemSegEvaluator"),
+    dict(type="CheckpointSaverWandb", save_freq=5),
+    dict(type="MaskBalanceLoggingHook"),
+    # dict(type="PreciseEvaluator", test_last=False),
+]
+
 # Sculpting params
 sculpting_transform = dict(
     type="AdditiveMasking",
@@ -41,7 +59,7 @@ voxelize_transform = dict(
     how_to_agg_feats=dict(
         coord="mean",
         color="mean",
-        segment="rand_choice",
+        segment="max",
         normal="first",
     ),
 )
