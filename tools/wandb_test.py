@@ -5,6 +5,10 @@ import pandas as pd
 import tempfile
 import subprocess
 from contextlib import contextmanager
+from datetime import datetime, timezone
+from copy import deepcopy
+
+DEFAULT_TEST_CONFIG=dict(type= "ScanNetDataset", split="val", data_root= "data/scannet", transform=[ dict(type="CenterShift", apply_z=True), dict(type="NormalizeColor"), ], test_mode=True, test_cfg=dict( voxelize=dict( type="GridSample", grid_size=0.02, hash_type="fnv", mode="test", return_grid_coord=True,), crop=None, post_transform=[ dict(type="CenterShift", apply_z=False), dict(type="ToTensor"), dict( type="Collect", keys=("coord", "grid_coord", "index"), feat_keys=("color",),), ], aug_transform=[ [ dict( type="RandomRotateTargetAngle", angle=[0], axis="z", center=[0, 0, 0], p=1,) ], [ dict( type="RandomRotateTargetAngle", angle=[1 / 2], axis="z", center=[0, 0, 0], p=1,) ], [ dict( type="RandomRotateTargetAngle", angle=[1], axis="z", center=[0, 0, 0], p=1,) ], [ dict( type="RandomRotateTargetAngle", angle=[3 / 2], axis="z", center=[0, 0, 0], p=1,) ], [ dict( type="RandomRotateTargetAngle", angle=[0], axis="z", center=[0, 0, 0], p=1,), dict(type="RandomScale", scale=[0.95, 0.95]), ], [ dict( type="RandomRotateTargetAngle", angle=[1 / 2], axis="z", center=[0, 0, 0], p=1,), dict(type="RandomScale", scale=[0.95, 0.95]), ], [ dict( type="RandomRotateTargetAngle", angle=[1], axis="z", center=[0, 0, 0], p=1,), dict(type="RandomScale", scale=[0.95, 0.95]), ], [ dict( type="RandomRotateTargetAngle", angle=[3 / 2], axis="z", center=[0, 0, 0], p=1,), dict(type="RandomScale", scale=[0.95, 0.95]), ], [ dict( type="RandomRotateTargetAngle", angle=[0], axis="z", center=[0, 0, 0], p=1,), dict(type="RandomScale", scale=[1.05, 1.05]), ], [ dict( type="RandomRotateTargetAngle", angle=[1 / 2], axis="z", center=[0, 0, 0], p=1,), dict(type="RandomScale", scale=[1.05, 1.05]), ], [ dict( type="RandomRotateTargetAngle", angle=[1], axis="z", center=[0, 0, 0], p=1,), dict(type="RandomScale", scale=[1.05, 1.05]), ], [ dict( type="RandomRotateTargetAngle", angle=[3 / 2], axis="z", center=[0, 0, 0], p=1,), dict(type="RandomScale", scale=[1.05, 1.05]), ], [dict(type="RandomFlip", p=1)], ]))
 
 def save_run_config(api: wandb.Api, entity: str, project: str, run_id: str, base_output_dir: str = "./run_data") -> str:
     """
@@ -21,11 +25,17 @@ def save_run_config(api: wandb.Api, entity: str, project: str, run_id: str, base
     # Create an output directory specifically for this run's config
     run_dir = os.path.join(base_output_dir, run_id)
     os.makedirs(run_dir, exist_ok=True)
-    
-    # Dump the config to a local YAML file
-    config_path = os.path.join(run_dir, f"config_{run_id}.yaml")
+
+    config = deepcopy(run.config)
+    config['data']['test']=DEFAULT_TEST_CONFIG
+    config['test']=dict(type="SidraTester", verbose=True)
+    config['batch_size']=8
+    config['num_worker']=32
+    # Dump the config to a local .py file
+    config_path = os.path.join(run_dir, f"config_{run_id}.py")
     with open(config_path, "w") as f:
-        yaml.dump(run.config, f, default_flow_style=False)
+        for key, value in config.items():
+            f.write(f"{key} = {repr(value)}\n")
     print(f"[+] Saved config to: {config_path}")
     
     return config_path
@@ -91,6 +101,11 @@ def process_and_build_experiments_df(entity: str, project: str, base_output_dir:
     lr_tags = ["LR1", "LR5", "LR10", "LR20", "LR100"]
     
     for run in runs:
+        # Only consider finished runs
+        if run.state != "finished":
+            print(f"[*] Skipping run {run.id} (State: {run.state})")
+            continue
+
         # Check for pretrain tag case-insensitively just to be safe
         if any(tag.lower() == "pretrain" for tag in run.tags):
             continue
@@ -121,22 +136,40 @@ def process_and_build_experiments_df(entity: str, project: str, base_output_dir:
         # Extract the weight parameter from the run's config
         config_weight = run.config.get("weight", None)
         
+        # Define the expected results file path
+        results_file = os.path.join(base_output_dir, run.id, "results.json")
+        
+        # Parse run creation date and check against cutoff (e.g., June 1st, 2026)
+        run_date_str = run.created_at.replace('Z', '+00:00')
+        run_date = datetime.fromisoformat(run_date_str)
+        cutoff_date = datetime(2026, 6, 1, tzinfo=timezone.utc)
+        print(run_date,cutoff_date)
+        is_after_cutoff = run_date > cutoff_date
+        
         try:
             # 1. Save config permanently
             config_path = save_run_config(api, entity, project, run.id, base_output_dir)
             
-            # 2. Download weights temporarily and run the script
-            with download_temp_weights(api, entity, project, run.id) as weight_path:
-                cmd = ["bash", "test.sh", "-c", config_path, "-w", weight_path]
-                run_dir = os.path.join(base_output_dir, run.id)
-                cmd = f"python tools/test.py --config-file {config_path} --num-gpus 1 --options save_path={run_dir} weight={weight_path}"
-                print(f"[*] Executing command: {' '.join(cmd)}")
-                
-                # Execute the bash script. check=True will raise an error if the script fails
-                subprocess.run(cmd, check=True)
-                print(f"[+] Test script finished successfully for run {run.id}")
+            # 2. Check if results already exist AND run is older than June 1st
+            if os.path.exists(results_file) and not is_after_cutoff:
+                print(f"[*] Results file already exists at {results_file} (Run Date: {run_date.strftime('%Y-%m-%d')}). Skipping execution.")
+                test_status = "Skipped (Already exists)"
+            else:
+                if os.path.exists(results_file) and is_after_cutoff:
+                    print(f"[*] Results exist, but run was started on {run_date.strftime('%Y-%m-%d')} (After June 1st cutoff). Forcing rerun.")
+                    
+                # 3. Download weights temporarily and run the script
+                with download_temp_weights(api, entity, project, run.id) as weight_path:
+                    run_dir = os.path.join(base_output_dir, run.id)
+                    cmd = f"python tools/test.py --config-file {config_path} --num-gpus 8 --options save_path={run_dir} weight={weight_path}".split()
+                    print(f"[*] Executing command: {' '.join(cmd)}")
+                    
+                    # Execute the bash script. check=True will raise an error if the script fails
+                    subprocess.run(cmd, check=True)
+                    print(f"[+] Test script finished successfully for run {run.id}")
+                test_status = "Success"
             
-            # 3. Add to our dataframe
+            # Add to our dataframe
             row_data = {
                 "run_id": run.id,
                 "run_name": run.name,
@@ -145,7 +178,8 @@ def process_and_build_experiments_df(entity: str, project: str, base_output_dir:
                 "lr_split": lr_split,
                 "config_weight": config_weight,
                 "config_path": config_path,
-                "config":dict(run.config)
+                "config":dict(run.config),
+                "test_status": test_status
             }
             row_data.update(val_metrics)
             data.append(row_data)
@@ -155,12 +189,12 @@ def process_and_build_experiments_df(entity: str, project: str, base_output_dir:
             row_data = {
                 "run_id": run.id,
                 "run_name": run.name,
-                "config_path": config_path,
-                "weight_file": "Temporary (Deleted)",
                 "parent_run_id": parent_run_id,
                 "parent_run_name": parent_run_name,
                 "lr_split": lr_split,
                 "config_weight": config_weight,
+                "config_path": config_path,
+                "config":dict(run.config),
                 "test_status": "Failed"
             }
             row_data.update(val_metrics)

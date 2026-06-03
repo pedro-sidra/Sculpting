@@ -28,16 +28,21 @@ b
 import pandas as pd
 from pypcd.pypcd import pandas_to_pypcd
 
-c = (1+b['feat'])/2
-coord=b['coord']
+# breakpoint()
+feat_key = 'feat'
+coord_key = 'coord'
+seg_key = 'segment'
+
+c = (1+b[feat_key])/2
+coord=b[coord_key]
 seg_color=np.zeros_like(coord)
 colors={
     0: [1,0,0],
     1: [0,1,0],
     2: [0,0,1],
 }
-for s in np.unique(b['segment']):
-    seg_color[b['segment']==s] = colors.get(s, [0,0,0])
+for s in np.unique(b[seg_key]):
+    seg_color[b[seg_key]==s] = colors.get(s, [0,0,0])
 
 pandas_to_pypcd(
     pd.DataFrame(dict(

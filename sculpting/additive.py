@@ -80,7 +80,7 @@ class AdditiveMasking(object):
         color = data_dict.get("color", None)
         normal = data_dict.get("normal", None)
 
-        self.mask_size_max = data_dict.get("mask_size", self.mask_size)
+        self.mask_size_max = data_dict.get("mask_size", self.mask_size_max)
 
         self.balance_npoint_frac(
             current_ncells_min=int(self.mask_size_min // self.cell_size),
