@@ -142,7 +142,7 @@ def process_and_build_experiments_df(entity: str, project: str, base_output_dir:
         # Parse run creation date and check against cutoff (e.g., June 1st, 2026)
         run_date_str = run.created_at.replace('Z', '+00:00')
         run_date = datetime.fromisoformat(run_date_str)
-        cutoff_date = datetime(2026, 6, 1, tzinfo=timezone.utc)
+        cutoff_date = datetime(2026, 8, 1, tzinfo=timezone.utc)
         print(run_date,cutoff_date)
         is_after_cutoff = run_date > cutoff_date
         
