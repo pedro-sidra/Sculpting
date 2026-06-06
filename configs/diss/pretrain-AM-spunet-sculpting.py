@@ -4,9 +4,9 @@ _base_ = ["pretrain-AM-spunet-base.py"]
 sculpting_transform = dict(
     type="AdditiveMasking",
     mode="sculpting",  # "Sculpting" or "Trimming"
-    sampling="chessboard",  # "chessboard" or "random" or "random_rotate"
+    sampling="random_rotate",  # "chessboard" or "random" or "random_rotate"
     density_factor=1.0,
-    mask_size_min=0.4,
+    mask_size_min=0.1,
     mask_size_max=0.4,
     cell_size=0.02,
 )
@@ -30,7 +30,7 @@ voxelize_transform = dict(
     how_to_agg_feats=dict(
         coord="mean",
         color="mean",
-        segment="rand_choice",
+        segment="max",
         normal="first",
     ),
 )

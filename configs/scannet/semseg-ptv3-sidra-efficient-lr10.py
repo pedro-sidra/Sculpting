@@ -19,7 +19,7 @@ model = dict(
     num_classes=20,
     backbone_out_channels=64,
     backbone=dict(
-        type="PT-v3m2",
+        type="PT-v3m1",
         in_channels=3,
         order=("z", "z-trans", "hilbert", "hilbert-trans"),
         stride=(2, 2, 2, 2),
@@ -43,10 +43,10 @@ model = dict(
         enable_flash=True,
         upcast_attention=False,
         upcast_softmax=False,
-        traceable=False,
-        mask_token=False,
-        enc_mode=False,
-        freeze_encoder=False,
+        # traceable=False,
+        # mask_token=False,
+        # enc_mode=False,
+        # freeze_encoder=False,
     ),
     criteria=[
         dict(type="CrossEntropyLoss", loss_weight=1.0, ignore_index=-1),

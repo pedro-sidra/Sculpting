@@ -1,7 +1,7 @@
 _base_ = ["../_base_/default_runtime.py"]
 
 # misc custom setting
-batch_size = 96  # bs: total bs in all gpus
+batch_size = 32  # bs: total bs in all gpus
 num_worker = 32
 mix_prob = 0
 empty_cache = False
@@ -37,10 +37,10 @@ hooks = [
 # Sculpting params
 sculpting_transform = dict(
     type="AdditiveMasking",
-    mode="Trimming",  # "Sculpting" or "Trimming"
-    sampling="chessboard",  # "chessboard" or "random" or "random_rotate"
-    density_factor=1,
-    mask_size_min=0.4,
+    mode="rand",  # "Sculpting" or "Trimming"
+    sampling="random_rotate",  # "chessboard" or "random" or "random_rotate"
+    density_factor="rand",
+    mask_size_min=0.1,
     mask_size_max=0.4,
     cell_size=0.02,
 )
@@ -133,7 +133,7 @@ data = dict(
             "train",
             # "val",
             # "test",
-            "arkit",
+            # "arkit",
         ],
         data_root=data_root,
         transform=[
