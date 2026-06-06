@@ -30,10 +30,10 @@ def get_perlin(noise_num_cells, noise_cell_size):
     noise = noise.flatten()
 
     threshold = 0.8/noise_num_cells[0]
-    if np.random.rand()>0.5:
-        locs = np.bitwise_and(noise < threshold, noise > -threshold)
-    else:
-        locs = np.bitwise_and(noise > 1e-6, noise < 2*threshold)
+    # if np.random.rand()>0.5:
+    locs = np.bitwise_and(noise < threshold, noise > -threshold)
+    # else:
+    #     locs = np.bitwise_and(noise > 1e-6, noise < 2*threshold)
 
     i = noise_cell_size * i.flatten()[locs]
     j = noise_cell_size * j.flatten()[locs]

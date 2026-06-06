@@ -127,6 +127,7 @@ class AdditiveMaskSizeScheduler(HookBase):
                 self.mask_ratio_scheduler.iter,
             )
 
+
 @TRANSFORMS.register_module()
 class AdditiveMasking(object):
     """
@@ -140,13 +141,13 @@ class AdditiveMasking(object):
     """
     def __init__(
         self,
-        mode="Sculpting",  # "Sculpting" or "Trimming"
+        mode="Sculpting",  # "Sculpting", "Trimming", or "rand"
         sampling="chessboard",  # "chessboard", "random", or "random_rotate"
         npoint_frac=None,
         mask_size_min=0.1,
         mask_size_max=0.5,
         cell_size=0.02,
-        density_factor=0.1,
+        density_factor=0.1,  # float or "rand"
         mask_dictname="segment",
         mask_ratio=1
     ):
@@ -164,26 +165,24 @@ class AdditiveMasking(object):
         self.mask_size_scheduler = None
         self.mask_ratio_scheduler = None
 
-        if mode.lower().startswith("t"):
-            self.get_mask = get_trimming_block
-            self.density_factor = 1.0
-        else:
-            self.get_mask = get_sculpting_block
+        # Load both block generators to support 'rand' mode swapping
+        self._get_trimming_block_fn = get_trimming_block
+        self._get_sculpting_block_fn = get_sculpting_block
 
         if self.sampling.startswith("c"): # chessboard
             # For chessboard sampling, we want a fixed block size
             self.mask_size_min = mask_size_max 
 
-    def balance_npoint_frac(self, current_ncells_min, current_ncells_max):
-        if self.mode.lower().startswith("t"):
-            actual_density_factor=0.15
+    def balance_npoint_frac(self, current_ncells_min, current_ncells_max, active_mode, active_density_factor):
+        if active_mode.lower().startswith("t"):
+            actual_density_factor = 0.15
         else:
-            actual_density_factor=self.density_factor
+            actual_density_factor = active_density_factor
 
         if self.sampling.startswith("c"): # chessboard
-            self.npoint_frac=self.mask_ratio/(actual_density_factor * max(1, current_ncells_max**3))
+            self.npoint_frac = self.mask_ratio / (actual_density_factor * max(1, current_ncells_max**3))
         else: # random or random_rotate
-            self.npoint_frac=self.mask_ratio*8/(actual_density_factor * max(1, (current_ncells_max+current_ncells_min+1)**3))
+            self.npoint_frac = self.mask_ratio * 8 / (actual_density_factor * max(1, (current_ncells_max+current_ncells_min+1)**3))
 
     def __call__(self, data_dict):
         """
@@ -203,9 +202,29 @@ class AdditiveMasking(object):
         if self.sampling.startswith("c"):
             self.mask_size_min = self.mask_size_max
 
+        # Resolve mode dynamically for this sample
+        if self.mode.lower() == "rand":
+            active_mode = "Trimming" if np.random.rand() > 0.5 else "Sculpting"
+        else:
+            active_mode = self.mode
+
+        # Resolve density factor and block function
+        if active_mode.lower().startswith("t"):
+            active_get_mask = self._get_trimming_block_fn
+            active_density_factor = 1.0
+        else:
+            active_get_mask = self._get_sculpting_block_fn
+            if self.density_factor == "rand":
+                # Uniformly pick density factor between 0.1 and 1.0
+                active_density_factor = np.random.uniform(0.1, 1.0)
+            else:
+                active_density_factor = float(self.density_factor)
+
         self.balance_npoint_frac(
             current_ncells_min=int(self.mask_size_min // self.cell_size),
             current_ncells_max=int(self.mask_size_max // self.cell_size),
+            active_mode=active_mode,
+            active_density_factor=active_density_factor
         )
 
         # 1. Choose K based on npoint_frac and point cloud size
@@ -262,12 +281,12 @@ class AdditiveMasking(object):
             num_cells = int(b_size // self.cell_size)
             
             # Retrieve basic block at origin (cached for Sculpting mode to save time)
-            if self.mode.lower().startswith("s"):
+            if active_mode.lower().startswith("s"):
                 if num_cells not in cached_blocks:
-                    cached_blocks[num_cells] = self.get_mask(num_cells, self.cell_size)
+                    cached_blocks[num_cells] = active_get_mask(num_cells, self.cell_size)
                 block = cached_blocks[num_cells]
             else:
-                block = self.get_mask(num_cells, self.cell_size)
+                block = active_get_mask(num_cells, self.cell_size)
 
             if len(block) == 0:
                 continue
@@ -309,9 +328,9 @@ class AdditiveMasking(object):
                 block_normals = np.vstack(_block_normals)
 
             # Optimization: Uniformly subsample the aggregated blocks
-            if self.density_factor is not None and self.density_factor < 1.0:
+            if active_density_factor is not None and active_density_factor < 1.0:
                 num_total_added = len(block_coords)
-                num_to_keep = max(1, int(num_total_added * self.density_factor))
+                num_to_keep = max(1, int(num_total_added * active_density_factor))
                 choices = np.random.choice(num_total_added, num_to_keep, replace=False)
                 
                 block_coords = block_coords[choices]
