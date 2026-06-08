@@ -6,8 +6,8 @@ Dataset: ScanNet v2, ScanNet++, S3DIS, HM3D, ArkitScene, Structured3D
 _base_ = ["../_base_/default_runtime.py"]
 
 # misc custom setting
-batch_size = 2  # bs: total bs in all gpus
-num_worker = 2
+batch_size = 16  # bs: total bs in all gpus
+num_worker = 16
 mix_prob = 0
 clip_grad = 3.0
 empty_cache = False
@@ -20,14 +20,15 @@ model = dict(
     type="Sonata-v1m1",
     # backbone - student & teacher
     backbone=dict(
-        type="SpUNet-v2m1",
+        type="SpUNet-v3m1",
         in_channels=3,
         num_classes=0,
         channels=(32, 64, 128, 256, 256, 128, 96, 96),
         layers=(2, 3, 4, 6, 2, 2, 2, 2),
+        enc_mode=True
     ),
     teacher_custom=dict(),
-    head_in_channels=96,
+    head_in_channels=448,
     head_hidden_channels=256,
     head_embed_channels=256,
     head_num_prototypes=1024,
@@ -51,7 +52,7 @@ model = dict(
     momentum_final=1,
     match_max_k=8,
     match_max_r=0.32,
-    up_cast_level=0,
+    up_cast_level=2,
 )
 
 # scheduler settings

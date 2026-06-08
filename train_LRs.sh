@@ -4,14 +4,16 @@ set -e
 DIST_URL='auto'
 DATASET=scannet
 CONFIG_BASE=semseg-spunet-sidra-efficient-lr
-EXP_NAME_BASE="diss/FT_trimming_01"
-WEIGHT="pedrosidra/diss/zpb1wjgw-model_last:v19"
+EXP_NAME_BASE="diss/FT-spunet-enc-sonata-lr"
 MACHINES=1
-GPUS=2
+GPUS=4
+WEIGHT="pedrosidra/debug/leq4cgk7-model_last:v19"
 
 export PYTHONPATH=/workspaces/Sculpting/Pointcept
-export GLOO_SOCKET_IFNAME=enp36s0f1
-export NCCL_SOCKET_IFNAME=enp36s0f1
+
+# TRAIN_COMMAND="scripts/train.sh -g 8 -d scannet -c pretrain-sonata-litept -n debug/pretrain-sonata-litept"
+# bash $TRAIN_COMMAND
+
 
 for LR in 1 5 10 20 100
 do

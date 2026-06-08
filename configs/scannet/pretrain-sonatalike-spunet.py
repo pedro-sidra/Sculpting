@@ -60,14 +60,15 @@ model = dict(
     type="SonataSculptor-v1m1",
     # backbone - student & teacher
     backbone=dict(
-        type="SpUNet-v2m1",
+        type="SpUNet-v3m1",
         in_channels=3,
         num_classes=0,
         channels=(32, 64, 128, 256, 256, 128, 96, 96),
         layers=(2, 3, 4, 6, 2, 2, 2, 2),
+        enc_mode=True
     ),
     teacher_custom=dict(),
-    head_in_channels=96,
+    head_in_channels=448,
     head_hidden_channels=256,
     head_embed_channels=256,
     head_num_prototypes=1024,
@@ -92,7 +93,7 @@ model = dict(
     momentum_final=1,
     match_max_k=8,
     match_max_r=0.32,
-    up_cast_level=0,
+    up_cast_level=2,
 )
 
 # scheduler settings
@@ -222,7 +223,18 @@ hooks = [
     dict(type="WeightDecaySchedular", base_value=base_wd, final_value=final_wd),
     dict(type="IterationTimer", warmup_iter=2),
     dict(type="InformationWriter"),
+    dict(type="AdditiveMaskSizeScheduler",
+        mask_size_start=0.1,
+        mask_size_base=0.4,
+        mask_size_end=0.4,
+        mask_size_warmup_ratio=0.25,
+        mask_ratio_start=0.3,
+        mask_ratio_base=1.0,
+        mask_ratio_end=1.0,
+        mask_ratio_warmup_ratio=0.5,
+    ),
+    dict(type="SemSegEvaluator"),
     dict(type="CheckpointSaverWandb", save_freq=5),
-    # dict(type="SemSegEvaluator"),
+    dict(type="MaskBalanceLoggingHook"),
     # dict(type="PreciseEvaluator", test_last=False),
 ]

@@ -25,3 +25,4 @@ artifacts/
 slurm/
 *.pcd
 run_data/
+.env/

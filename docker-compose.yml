@@ -22,6 +22,7 @@ services:
     volumes:
       - .:/workspaces/Sculpting
       - $HOME/.netrc:/root/.netrc
+      - /raid/sidra/arkit_train:/workspaces/Sculpting/data/scannet/arkit
       - $HOME/.bash_history:/root/.bash_history
     shm_size: "32gb"
     privileged: false
@@ -32,5 +33,5 @@ services:
         reservations:
           devices:
             - driver: nvidia
-              count: 2
+              count: 8
               capabilities: [gpu]
