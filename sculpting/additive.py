@@ -149,7 +149,9 @@ class AdditiveMasking(object):
         cell_size=0.02,
         density_factor=0.1,  # float or "rand"
         mask_dictname="segment",
-        mask_ratio=1
+        mask_ratio=1,
+        remove_masked_points=False,
+        mask_feature_mode="point", # "point", "random", or "null"
     ):
         self.mode = mode
         self.sampling = sampling
@@ -160,6 +162,8 @@ class AdditiveMasking(object):
         self.density_factor = density_factor
         self.mask_dictname = mask_dictname
         self.mask_ratio = mask_ratio
+        self.remove_masked_points = remove_masked_points
+        self.mask_feature_mode = mask_feature_mode
 
         # Schedulers are safely injected by MaskSizeScheduler hook right before DataLoader spawning
         self.mask_size_scheduler = None
@@ -315,9 +319,30 @@ class AdditiveMasking(object):
             
             num_pts = len(block)
             if color is not None:
-                _block_colors.append(np.tile(color[feat_idxs[i]], (num_pts, 1)))
+                if self.mask_feature_mode == "point":
+                    _block_colors.append(np.tile(color[feat_idxs[i]], (num_pts, 1)))
+                else:
+                    _block_colors.append(np.zeros((num_pts, color.shape[1])))
             if normal is not None:
-                _block_normals.append(np.tile(normal[feat_idxs[i]], (num_pts, 1)))
+                if self.mask_feature_mode == "point":
+                    _block_normals.append(np.tile(normal[feat_idxs[i]], (num_pts, 1)))
+                else:
+                    _block_normals.append(np.zeros((num_pts, normal.shape[1])))
+
+        # Remove points that were flagged as masked (2) if the flag is active
+        if self.remove_masked_points:
+            keep_mask = orig_mask != 2
+            coord = coord[keep_mask]
+            orig_mask = orig_mask[keep_mask]
+            if color is not None:
+                color = color[keep_mask]
+            if normal is not None:
+                normal = normal[keep_mask]
+
+            # In case no blocks were generated, we still update the base dict now
+            data_dict["coord"] = coord
+            if color is not None: data_dict["color"] = color
+            if normal is not None: data_dict["normal"] = normal
 
         if _block_coords:
             block_coords = np.vstack(_block_coords)
@@ -338,24 +363,58 @@ class AdditiveMasking(object):
                 if normal is not None: block_normals = block_normals[choices]
 
             # Calculate mask_balance (ratio of added points to original points)
-            mask_balance = len(block_coords) / len(coord)
+            mask_balance = len(block_coords) / max(1, len(coord))
 
             data_dict["coord"] = np.vstack([coord, block_coords]).astype(np.float32)
             
-            if color is not None:
-                data_dict["color"] = np.vstack([color, block_colors]).astype(np.float32)
-                
-            if normal is not None:
-                data_dict["normal"] = np.vstack([normal, block_normals]).astype(np.float32)
-                
             # 4. Set labels of added blocks to 1
             final_mask = np.hstack([orig_mask, np.ones(len(block_coords), dtype=np.int32)])
             data_dict[self.mask_dictname] = final_mask
             
+            if color is not None:
+                final_color = np.vstack([color, block_colors]).astype(np.float32)
+                if self.mask_feature_mode == "random":
+                    mask_12 = (final_mask == 1) | (final_mask == 2)
+                    final_color[mask_12] = np.random.rand(np.sum(mask_12), final_color.shape[1]).astype(np.float32) * 255.0
+                elif self.mask_feature_mode == "null":
+                    mask_12 = (final_mask == 1) | (final_mask == 2)
+                    final_color[mask_12] = 1.0
+                data_dict["color"] = final_color
+                
+            if normal is not None:
+                final_normal = np.vstack([normal, block_normals]).astype(np.float32)
+                if self.mask_feature_mode == "random":
+                    mask_12 = (final_mask == 1) | (final_mask == 2)
+                    rand_n = np.random.rand(np.sum(mask_12), final_normal.shape[1]).astype(np.float32) * 2.0 - 1.0
+                    norms = np.linalg.norm(rand_n, axis=1, keepdims=True)
+                    norms[norms == 0] = 1.0
+                    final_normal[mask_12] = rand_n / norms
+                elif self.mask_feature_mode == "null":
+                    mask_12 = (final_mask == 1) | (final_mask == 2)
+                    final_normal[mask_12] = 1.0
+                data_dict["normal"] = final_normal
+
             # Pass mask_balance via data_dict for Pointcept's main writer to log safely
             data_dict["mask_balance"] = float(mask_balance)
         else:
             data_dict[self.mask_dictname] = orig_mask
             data_dict["mask_balance"] = 0.0
+
+            # Even if no blocks were added, we might need to overwrite masked (2) point features
+            if self.mask_feature_mode == "random":
+                mask_2 = (orig_mask == 2)
+                if color is not None and np.any(mask_2):
+                    data_dict["color"][mask_2] = np.random.rand(np.sum(mask_2), color.shape[1]).astype(np.float32) * 255.0
+                if normal is not None and np.any(mask_2):
+                    rand_n = np.random.rand(np.sum(mask_2), normal.shape[1]).astype(np.float32) * 2.0 - 1.0
+                    norms = np.linalg.norm(rand_n, axis=1, keepdims=True)
+                    norms[norms == 0] = 1.0
+                    data_dict["normal"][mask_2] = rand_n / norms
+            elif self.mask_feature_mode == "null":
+                mask_2 = (orig_mask == 2)
+                if color is not None and np.any(mask_2):
+                    data_dict["color"][mask_2] = 1.0
+                if normal is not None and np.any(mask_2):
+                    data_dict["normal"][mask_2] = 1.0
 
         return data_dict

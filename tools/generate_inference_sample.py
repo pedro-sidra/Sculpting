@@ -1,4 +1,5 @@
 from pointcept.engines.defaults import  default_setup
+from pathlib import Path
 import os
 import yaml
 import wandb
@@ -14,7 +15,7 @@ from pointcept.engines.defaults import (
     default_config_parser,
 )
 import pandas as pd
-from pypcd.pypcd import pandas_to_pypcd
+from pypcd.pypcd import pandas_to_pypcd, encode_rgb_for_pcl
 from pointcept.engines.train import TRAINERS
 import os
 import sculpting
@@ -30,83 +31,78 @@ WANDB_PROJECT = "diss"
 
 api=wandb.Api()
 
-run_id = sys.argv[1]
-config_file = save_run_config(api, WANDB_ENTITY,WANDB_PROJECT, run_id)
-run_dir=f"./run_data/{run_id}"
-# weight = sys.argv[2]
+run_ids = sys.argv[1:]
+for run_id in run_ids:
+    config_file = save_run_config(api, WANDB_ENTITY,WANDB_PROJECT, run_id)
+    run_dir=f"./run_data/{run_id}"
+    # weight = sys.argv[2]
 
-# 3. Download weights temporarily and run the script
-with download_temp_weights(api, WANDB_ENTITY, WANDB_PROJECT, run_id) as weight_path:
-    run_dir = os.path.join(run_dir, run_id)
-    print(run_dir, config_file, weight_path)
-    
+    # 3. Download weights temporarily and run the script
+    with download_temp_weights(api, WANDB_ENTITY, WANDB_PROJECT, run_id) as weight_path:
+        run_dir = os.path.join(run_dir, run_id)
+        print(run_dir, config_file, weight_path)
+        
 
-    args = default_argument_parser().parse_args(
-        f"--config-file {config_file} --num-gpus 0 --options weight={weight_path} num_workers=0 num_worker_per_gpu=0 batch_size=1 gradient_accumulation_steps=1".split()
-    )
-    cfg = default_config_parser(args.config_file, args.options)
-    cfg = default_setup(cfg)
-    cfg.num_worker_per_gpu=0
-    trainer = TRAINERS.build(dict(type=cfg.train.type, cfg=cfg))
+        args = default_argument_parser().parse_args(
+            f"--config-file {config_file} --num-gpus 0 --options weight={weight_path} num_workers=0 num_worker_per_gpu=0 batch_size=1 gradient_accumulation_steps=1".split()
+        )
+        cfg = default_config_parser(args.config_file, args.options)
+        cfg = default_setup(cfg)
+        cfg.num_worker_per_gpu=0
+        trainer = TRAINERS.build(dict(type=cfg.train.type, cfg=cfg))
 
-    # train_loader = trainer.train_loader
-    # i, b = next(enumerate(train_loader))
+        # train_loader = trainer.train_loader
+        # i, b = next(enumerate(train_loader))
 
-    trainer.before_train()
-    trainer.model.eval()
-    for i, input_dict in enumerate(trainer.val_loader):
+        trainer.before_train()
+        trainer.model.eval()
+        for i, input_dict in enumerate(trainer.val_loader):
+            for key in input_dict.keys():
+                if isinstance(input_dict[key], torch.Tensor):
+                    input_dict[key] = input_dict[key].cuda(non_blocking=True)
+            with torch.no_grad():
+                output_dict = trainer.model(input_dict)
+            output = output_dict["seg_logits"]
+            loss = output_dict["loss"]
+            pred = output.max(1)[1]
+            # segment = input_dict["segment"]
+            input_dict['pred']=pred
+            break
+
+        feat_key = 'feat'
+        coord_key = 'coord'
+        seg_key = 'pred'
+
+        scene_name = Path(trainer.val_loader.dataset.data_list[i]).stem
+
         for key in input_dict.keys():
             if isinstance(input_dict[key], torch.Tensor):
-                input_dict[key] = input_dict[key].cuda(non_blocking=True)
-        with torch.no_grad():
-            output_dict = trainer.model(input_dict)
-        output = output_dict["seg_logits"]
-        loss = output_dict["loss"]
-        pred = output.max(1)[1]
-        # segment = input_dict["segment"]
-        input_dict['pred']=pred
-        break
+                input_dict[key] = input_dict[key].cpu()
 
-    # breakpoint()
-    feat_key = 'feat'
-    coord_key = 'coord'
-    seg_key = 'pred'
+        colors = input_dict[feat_key]
+        c= (colors-colors.min())/(colors.max()-colors.min())
+        coord=input_dict[coord_key]
 
-    for key in input_dict.keys():
-        if isinstance(input_dict[key], torch.Tensor):
-            input_dict[key] = input_dict[key].cpu()
+        rgb = encode_rgb_for_pcl((255*c).numpy().astype(np.uint8))
 
-    c = (1+input_dict[feat_key])/2
-    coord=input_dict[coord_key]
-    seg_color=np.zeros_like(coord)
-    colors={
-        0: [1,0,0],
-        1: [0,1,0],
-        2: [0,0,1],
-    }
-    for s in np.unique(input_dict[seg_key]):
-        seg_color[input_dict[seg_key]==s] = colors.get(s, [0,0,0])
-
-    pandas_to_pypcd(
-        pd.DataFrame(dict(
-        x=coord[:,0],
-        y=coord[:,1],
-        z=coord[:,2],
-        red=seg_color[:,0]*255,
-        green=seg_color[:,1]*255,
-        blue=seg_color[:,2]*255,
+        pc_data = pd.DataFrame(dict(
+            x=coord[:,0],
+            y=coord[:,1],
+            z=coord[:,2],
+            rgb=rgb,
+            label=input_dict['segment'].numpy(),
+            pred=input_dict['pred'].numpy(),
+            err=(input_dict['segment']!=input_dict['pred']).numpy().astype(np.int32)
         ))
-    ).save("sample_seg.pcd")
 
-    pandas_to_pypcd(
-        pd.DataFrame(dict(
-        x=coord[:,0],
-        y=coord[:,1],
-        z=coord[:,2],
-        red=c[:,0]*255,
-        green=c[:,1]*255,
-        blue=c[:,2]*255,
-        label=input_dict['segment'],
-        pred=input_dict['pred']
-        ))
-    ).save("sample.pcd")
+        pandas_to_pypcd(
+            pc_data
+        ).save_pcd(
+            f"samples/sample_{run_id}_{scene_name}.pcd",
+            compression="binary_compressed"
+        )
+
+        confusion = pd.crosstab(pc_data['label'], pc_data['pred'])
+        confusion.to_csv(
+            f"samples/confusion_{run_id}.csv",
+        )

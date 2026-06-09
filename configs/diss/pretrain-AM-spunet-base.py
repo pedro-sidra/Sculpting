@@ -35,7 +35,7 @@ voxelize_transform = dict(
     how_to_agg_feats=dict(
         coord="mean",
         color="mean",
-        segment="rand_choice",
+        segment="max",
         normal="first",
     ),
 )
