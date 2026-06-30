@@ -79,20 +79,38 @@ for run_id in run_ids:
             if isinstance(input_dict[key], torch.Tensor):
                 input_dict[key] = input_dict[key].cpu()
 
-        colors = input_dict[feat_key]
+        colors = input_dict[feat_key][:,-3:]
         c= (colors-colors.min())/(colors.max()-colors.min())
         coord=input_dict[coord_key]
 
         rgb = encode_rgb_for_pcl((255*c).numpy().astype(np.uint8))
+
+        label = input_dict['segment'].numpy()
+        pred = input_dict['pred'].numpy()
+
+        predviz = np.zeros_like(input_dict['segment'].numpy())
+        # possible cases:
+        # (label,pred) = (0, X) -> ORIGINAL
+        # (label,pred) = (1, 1) -> True  Mask
+        # (label,pred) = (1, 2) -> False Object
+        # (label,pred) = (2, 1) -> False Mask
+        # (label,pred) = (2, 2) -> True Object
+        # 
+        predviz[(label==1) & (pred==1)] = 1 # True Mask
+        predviz[(label==1) & (pred==2)] = 2 # False Object
+        predviz[(label==2) & (pred==1)] = 3 # False Mask
+        predviz[(label==2) & (pred==2)] = 4 # True Object
+        predviz[label==0]=0
+
 
         pc_data = pd.DataFrame(dict(
             x=coord[:,0],
             y=coord[:,1],
             z=coord[:,2],
             rgb=rgb,
-            label=input_dict['segment'].numpy(),
-            pred=input_dict['pred'].numpy(),
-            err=(input_dict['segment']!=input_dict['pred']).numpy().astype(np.int32)
+            label=label,
+            pred=pred,
+            pred_viz=predviz
         ))
 
         pandas_to_pypcd(

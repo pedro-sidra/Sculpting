@@ -26,7 +26,7 @@ model = dict(
     type="DefaultSegmentor",
     backbone=dict(
         type="SpUNet-v1m1",
-        in_channels=3,
+        in_channels=6,
         num_classes=20,
         channels=(32, 64, 128, 256, 256, 128, 96, 96),
         layers=(2, 3, 4, 6, 2, 2, 2, 2),
@@ -116,7 +116,7 @@ data = dict(
             dict(
                 type="Collect",
                 keys=("coord", "grid_coord", "segment"),
-                feat_keys=("color",),
+                feat_keys=("color", "normal"),
             ),
         ],
         test_mode=False,
@@ -127,21 +127,22 @@ data = dict(
         data_root=data_root,
         transform=[
             dict(type="CenterShift", apply_z=True),
+            dict(type="Copy", keys_dict={"segment": "origin_segment"}),
             dict(
                 type="GridSample",
                 grid_size=0.02,
                 hash_type="fnv",
                 mode="train",
                 return_grid_coord=True,
+                return_inverse=True,
             ),
-            # dict(type="SphereCrop", point_max=1000000, mode="center"),
             dict(type="CenterShift", apply_z=False),
             dict(type="NormalizeColor"),
             dict(type="ToTensor"),
             dict(
                 type="Collect",
-                keys=("coord", "grid_coord", "segment"),
-                feat_keys=("color",),
+                keys=("coord", "grid_coord", "segment", "origin_segment", "inverse"),
+                feat_keys=("color", "normal"),
             ),
         ],
         test_mode=False,
@@ -170,7 +171,7 @@ data = dict(
                 dict(
                     type="Collect",
                     keys=("coord", "grid_coord", "index"),
-                    feat_keys=("color",),
+                    feat_keys=("color", "normal"),
                 ),
             ],
             aug_transform=[

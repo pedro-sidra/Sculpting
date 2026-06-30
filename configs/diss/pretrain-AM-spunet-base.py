@@ -78,8 +78,7 @@ sculpting_data_base_configs = dict(
 # misc custom setting
 batch_size = 16  # bs: total bs in all gpus
 num_worker = 16
-mix_prob = 0.8
-clip_grad = 3.0
+mix_prob = 0
 empty_cache = False
 enable_amp = True
 amp_dtype = "bfloat16"

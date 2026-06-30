@@ -48,7 +48,7 @@ model = dict(
     backbone_out_channels=72,
     backbone=dict(
         type="LitePT-v1",
-        in_channels=3,
+        in_channels=6,
         order=("z", "z-trans", "hilbert", "hilbert-trans"),
         stride=(2, 2, 2, 2),
         enc_depths=(2, 2, 2, 6, 2),
@@ -146,7 +146,7 @@ data = dict(
             dict(
                 type="Collect",
                 keys=("coord", "grid_coord", "segment"),
-                feat_keys=("color",),
+                feat_keys=("coord","color",),
             ),
         ],
         test_mode=False,
@@ -170,7 +170,7 @@ data = dict(
             dict(
                 type="Collect",
                 keys=("coord", "grid_coord", "segment"),
-                feat_keys=("color",),
+                feat_keys=("coord","color",),
             ),
         ],
         test_mode=False,
@@ -200,7 +200,7 @@ data = dict(
                 dict(
                     type="Collect",
                     keys=("coord", "grid_coord", "index"),
-                    feat_keys=("color",),
+                    feat_keys=("coord","color",),
                 ),
             ],
             aug_transform=[

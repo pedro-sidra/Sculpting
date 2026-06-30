@@ -30,6 +30,10 @@ class AdditiveMaskSizeScheduler(HookBase):
         mask_ratio_end=0.1,
         mask_ratio_base=0.7,
         mask_ratio_warmup_ratio=0.05,
+        density_factor_start=None,
+        density_factor_end=None,
+        density_factor_base=None,
+        density_factor_warmup_ratio=0.05,
     ):
         # masking and scheduler
         self.mask_size_start = mask_size_start
@@ -43,6 +47,13 @@ class AdditiveMaskSizeScheduler(HookBase):
         self.mask_ratio_base = mask_ratio_base
         self.mask_ratio_warmup_ratio = mask_ratio_warmup_ratio
         self.mask_ratio_scheduler = None
+        
+        # density factor scheduler
+        self.density_factor_start = density_factor_start
+        self.density_factor_end = density_factor_end
+        self.density_factor_base = density_factor_base
+        self.density_factor_warmup_ratio = density_factor_warmup_ratio
+        self.density_factor_scheduler = None
 
     def find_additive_masking(self, transform):
         """Recursively search for the AdditiveMasking transform inside Pointcept's Compose object."""
@@ -77,6 +88,16 @@ class AdditiveMaskSizeScheduler(HookBase):
             total_iters=total_steps,
         )
         self.mask_ratio_scheduler.iter = curr_step
+        
+        if self.density_factor_start is not None:
+            self.density_factor_scheduler = CosineScheduler(
+                start_value=self.density_factor_start,
+                base_value=self.density_factor_base,
+                final_value=self.density_factor_end,
+                warmup_iters=int(total_steps * self.density_factor_warmup_ratio),
+                total_iters=total_steps,
+            )
+            self.density_factor_scheduler.iter = curr_step
 
         # 2. Worker schedulers (injected into the transform before DataLoader workers spawn)
         dataset = self.trainer.train_loader.dataset
@@ -108,6 +129,16 @@ class AdditiveMaskSizeScheduler(HookBase):
                 total_iters=worker_total_iters,
             )
             transform.mask_ratio_scheduler.iter = worker_curr_iter
+            
+            if self.density_factor_start is not None:
+                transform.density_factor_scheduler = CosineScheduler(
+                    start_value=self.density_factor_start,
+                    base_value=self.density_factor_base,
+                    final_value=self.density_factor_end,
+                    warmup_iters=int(worker_total_iters * self.density_factor_warmup_ratio),
+                    total_iters=worker_total_iters,
+                )
+                transform.density_factor_scheduler.iter = worker_curr_iter
 
     def before_step(self):
         # We step the main process logging schedulers. 
@@ -126,6 +157,14 @@ class AdditiveMaskSizeScheduler(HookBase):
                 mask_ratio,
                 self.mask_ratio_scheduler.iter,
             )
+            
+            if self.density_factor_scheduler is not None:
+                density_factor = self.density_factor_scheduler.step()
+                self.trainer.writer.add_scalar(
+                    "params/density_factor",
+                    density_factor,
+                    self.density_factor_scheduler.iter,
+                )
 
 
 @TRANSFORMS.register_module()
@@ -151,7 +190,9 @@ class AdditiveMasking(object):
         mask_dictname="segment",
         mask_ratio=1,
         remove_masked_points=False,
-        mask_feature_mode="point", # "point", "random", or "null"
+        mask_feature_mode=None, # backwards compat, overrides 1 and 2 if not None
+        mask_feature_mode_1="point", # for mask == 1: "point", "random", "null", or "rand"
+        mask_feature_mode_2=None, # for mask == 2: "point", "random", "null", "rand", or None
     ):
         self.mode = mode
         self.sampling = sampling
@@ -163,19 +204,22 @@ class AdditiveMasking(object):
         self.mask_dictname = mask_dictname
         self.mask_ratio = mask_ratio
         self.remove_masked_points = remove_masked_points
-        self.mask_feature_mode = mask_feature_mode
+        
+        if mask_feature_mode is not None:
+            self.mask_feature_mode_1 = mask_feature_mode
+            self.mask_feature_mode_2 = mask_feature_mode
+        else:
+            self.mask_feature_mode_1 = mask_feature_mode_1
+            self.mask_feature_mode_2 = mask_feature_mode_2
 
-        # Schedulers are safely injected by MaskSizeScheduler hook right before DataLoader spawning
+        # Schedulers are safely injected by AdditiveMaskSizeScheduler hook right before DataLoader spawning
         self.mask_size_scheduler = None
         self.mask_ratio_scheduler = None
+        self.density_factor_scheduler = None
 
         # Load both block generators to support 'rand' mode swapping
         self._get_trimming_block_fn = get_trimming_block
         self._get_sculpting_block_fn = get_sculpting_block
-
-        if self.sampling.startswith("c"): # chessboard
-            # For chessboard sampling, we want a fixed block size
-            self.mask_size_min = mask_size_max 
 
     def balance_npoint_frac(self, current_ncells_min, current_ncells_max, active_mode, active_density_factor):
         if active_mode.lower().startswith("t"):
@@ -202,15 +246,27 @@ class AdditiveMasking(object):
             self.mask_size_max = self.mask_size_scheduler.step()
         if self.mask_ratio_scheduler is not None:
             self.mask_ratio = self.mask_ratio_scheduler.step()
-
-        if self.sampling.startswith("c"):
-            self.mask_size_min = self.mask_size_max
+        if self.density_factor_scheduler is not None:
+            self.density_factor = self.density_factor_scheduler.step()
 
         # Resolve mode dynamically for this sample
         if self.mode.lower() == "rand":
             active_mode = "Trimming" if np.random.rand() > 0.5 else "Sculpting"
         else:
             active_mode = self.mode
+
+        # Resolve feature modes dynamically for this sample
+        if self.mask_feature_mode_1.lower() == "rand":
+            active_mask_feature_mode_1 = ["point", "random", "null"][np.random.randint(0, 3)]
+        else:
+            active_mask_feature_mode_1 = self.mask_feature_mode_1
+            
+        if self.mask_feature_mode_2 is None:
+            active_mask_feature_mode_2 = None
+        elif self.mask_feature_mode_2.lower() == "rand":
+            active_mask_feature_mode_2 = ["point", "random", "null"][np.random.randint(0, 3)]
+        else:
+            active_mask_feature_mode_2 = self.mask_feature_mode_2
 
         # Resolve density factor and block function
         if active_mode.lower().startswith("t"):
@@ -224,9 +280,14 @@ class AdditiveMasking(object):
             else:
                 active_density_factor = float(self.density_factor)
 
+        # --- SCENE-LEVEL SIZE CALCULATION ---
+        # Generate a single random block size for the entire scene before balancing and the loop
+        scene_mask_size = self.mask_size_min + np.random.rand() * (self.mask_size_max - self.mask_size_min)
+        scene_ncells = int(scene_mask_size // self.cell_size)
+
         self.balance_npoint_frac(
-            current_ncells_min=int(self.mask_size_min // self.cell_size),
-            current_ncells_max=int(self.mask_size_max // self.cell_size),
+            current_ncells_min=scene_ncells,
+            current_ncells_max=scene_ncells,
             active_mode=active_mode,
             active_density_factor=active_density_factor
         )
@@ -236,9 +297,8 @@ class AdditiveMasking(object):
 
         # 2. Sample K coordinates for centerpoints
         if self.sampling == "chessboard":
-            mask_size = self.mask_size_min
             min_coord = np.min(coord, axis=0)
-            grid_coord = np.floor((coord - min_coord) / mask_size).astype(np.int32)
+            grid_coord = np.floor((coord - min_coord) / scene_mask_size).astype(np.int32)
             
             unique_cells, clusters, count = torch.unique(
                 torch.tensor(grid_coord), dim=0, return_inverse=True, return_counts=True
@@ -248,7 +308,7 @@ class AdditiveMasking(object):
             picked_cells = np.random.randint(low=0, high=ncells, size=(K,))
             
             # Derived centerpoints
-            centerpoints = unique_cells[picked_cells].numpy() * mask_size + min_coord
+            centerpoints = unique_cells[picked_cells].numpy() * scene_mask_size + min_coord
             
             # Setup original labels: 0 for untouched, 2 for masked cells
             orig_mask = np.isin(clusters.numpy(), picked_cells).astype(np.int32) * 2
@@ -277,12 +337,7 @@ class AdditiveMasking(object):
         cached_blocks = {}
 
         for i in range(K):
-            if self.sampling == "chessboard":
-                b_size = mask_size
-            else:
-                b_size = self.mask_size_min + np.random.rand() * (self.mask_size_max - self.mask_size_min)
-                
-            num_cells = int(b_size // self.cell_size)
+            num_cells = scene_ncells
             
             # Retrieve basic block at origin (cached for Sculpting mode to save time)
             if active_mode.lower().startswith("s"):
@@ -319,12 +374,12 @@ class AdditiveMasking(object):
             
             num_pts = len(block)
             if color is not None:
-                if self.mask_feature_mode == "point":
+                if active_mask_feature_mode_1 == "point":
                     _block_colors.append(np.tile(color[feat_idxs[i]], (num_pts, 1)))
                 else:
                     _block_colors.append(np.zeros((num_pts, color.shape[1])))
             if normal is not None:
-                if self.mask_feature_mode == "point":
+                if active_mask_feature_mode_1 == "point":
                     _block_normals.append(np.tile(normal[feat_idxs[i]], (num_pts, 1)))
                 else:
                     _block_normals.append(np.zeros((num_pts, normal.shape[1])))
@@ -370,28 +425,45 @@ class AdditiveMasking(object):
             # 4. Set labels of added blocks to 1
             final_mask = np.hstack([orig_mask, np.ones(len(block_coords), dtype=np.int32)])
             data_dict[self.mask_dictname] = final_mask
-            
             if color is not None:
                 final_color = np.vstack([color, block_colors]).astype(np.float32)
-                if self.mask_feature_mode == "random":
-                    mask_12 = (final_mask == 1) | (final_mask == 2)
-                    final_color[mask_12] = np.random.rand(np.sum(mask_12), final_color.shape[1]).astype(np.float32) * 255.0
-                elif self.mask_feature_mode == "null":
-                    mask_12 = (final_mask == 1) | (final_mask == 2)
-                    final_color[mask_12] = 1.0
+                
+                # Apply changes independently for block points (1) and masked points (2)
+                mask_1 = (final_mask == 1)
+                if active_mask_feature_mode_1 == "random":
+                    final_color[mask_1] = np.random.rand(np.sum(mask_1), final_color.shape[1]).astype(np.float32)
+                elif active_mask_feature_mode_1 == "null":
+                    final_color[mask_1] = 1.0
+                    
+                mask_2 = (final_mask == 2)
+                if active_mask_feature_mode_2 == "random":
+                    final_color[mask_2] = np.random.rand(np.sum(mask_2), final_color.shape[1]).astype(np.float32)
+                elif active_mask_feature_mode_2 == "null":
+                    final_color[mask_2] = 1.0
+                    
                 data_dict["color"] = final_color
                 
             if normal is not None:
                 final_normal = np.vstack([normal, block_normals]).astype(np.float32)
-                if self.mask_feature_mode == "random":
-                    mask_12 = (final_mask == 1) | (final_mask == 2)
-                    rand_n = np.random.rand(np.sum(mask_12), final_normal.shape[1]).astype(np.float32) * 2.0 - 1.0
+                
+                mask_1 = (final_mask == 1)
+                if active_mask_feature_mode_1 == "random":
+                    rand_n = np.random.rand(np.sum(mask_1), final_normal.shape[1]).astype(np.float32) * 2.0 - 1.0
                     norms = np.linalg.norm(rand_n, axis=1, keepdims=True)
                     norms[norms == 0] = 1.0
-                    final_normal[mask_12] = rand_n / norms
-                elif self.mask_feature_mode == "null":
-                    mask_12 = (final_mask == 1) | (final_mask == 2)
-                    final_normal[mask_12] = 1.0
+                    final_normal[mask_1] = rand_n / norms
+                elif active_mask_feature_mode_1 == "null":
+                    final_normal[mask_1] = 1.0
+
+                mask_2 = (final_mask == 2)
+                if active_mask_feature_mode_2 == "random":
+                    rand_n = np.random.rand(np.sum(mask_2), final_normal.shape[1]).astype(np.float32) * 2.0 - 1.0
+                    norms = np.linalg.norm(rand_n, axis=1, keepdims=True)
+                    norms[norms == 0] = 1.0
+                    final_normal[mask_2] = rand_n / norms
+                elif active_mask_feature_mode_2 == "null":
+                    final_normal[mask_2] = 1.0
+                    
                 data_dict["normal"] = final_normal
 
             # Pass mask_balance via data_dict for Pointcept's main writer to log safely
@@ -401,16 +473,16 @@ class AdditiveMasking(object):
             data_dict["mask_balance"] = 0.0
 
             # Even if no blocks were added, we might need to overwrite masked (2) point features
-            if self.mask_feature_mode == "random":
+            if active_mask_feature_mode_2 == "random":
                 mask_2 = (orig_mask == 2)
                 if color is not None and np.any(mask_2):
-                    data_dict["color"][mask_2] = np.random.rand(np.sum(mask_2), color.shape[1]).astype(np.float32) * 255.0
+                    data_dict["color"][mask_2] = np.random.rand(np.sum(mask_2), color.shape[1]).astype(np.float32)
                 if normal is not None and np.any(mask_2):
                     rand_n = np.random.rand(np.sum(mask_2), normal.shape[1]).astype(np.float32) * 2.0 - 1.0
                     norms = np.linalg.norm(rand_n, axis=1, keepdims=True)
                     norms[norms == 0] = 1.0
                     data_dict["normal"][mask_2] = rand_n / norms
-            elif self.mask_feature_mode == "null":
+            elif active_mask_feature_mode_2 == "null":
                 mask_2 = (orig_mask == 2)
                 if color is not None and np.any(mask_2):
                     data_dict["color"][mask_2] = 1.0

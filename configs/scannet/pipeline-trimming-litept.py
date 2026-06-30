@@ -15,15 +15,14 @@ hooks = [
 
 # Sculpting params
 sculpting_transform = dict(
-    type="TrimmingOcclude",
-    cube_size_min=0.4,
-    cube_size_max=0.5,
-    npoint_frac=1e-3,
-    npoints=None,
+    type="AdditiveMasking",
+    mode="trimming",  # "Sculpting" or "Trimming"
+    sampling="chessboard",  # "chessboard" or "random" or "random_rotate"
+    density_factor=1.0,
+    mask_size_min=0.4,
+    mask_size_max=0.4,
     cell_size=0.02,
-    density_factor=0.25,
-    kill_color_proba=0.0,
-    sampling="dense random",
+    mask_feature_mode="random"
 )
 
 update_index_keys = dict(
@@ -50,11 +49,10 @@ voxelize_transform = dict(
     mode="train",
     return_grid_coord=True,
     how_to_agg_feats=dict(
-        coord="mean",
-        color="mean",
-        segment="rand_choice",
-        normal="first",
-        instance="first",
+        coord="follow-mask",
+        color="follow-mask",
+        segment="max",
+        normal='follow-mask'
     ),
 )
 

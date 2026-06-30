@@ -1,9 +1,18 @@
-_base_ = ["pretrain-AM-spunet-base.py"]
+_base_ = ["../_base_/default_runtime.py"]
 
-batch_size = 16  # bs: total bs in all gpus
-num_worker = 16
-epoch = 100
-eval_epoch = 100
+# misc custom setting
+batch_size = 32  # bs: total bs in all gpus
+num_worker = 32
+mix_prob = 0
+empty_cache = False
+enable_amp = False
+amp_dtype = "bfloat16"
+evaluate = True
+find_unused_parameters = False
+
+epoch=100
+eval_epoch=100
+
 
 hooks = [
     dict(type="CheckpointLoaderAllowMismatch"),
@@ -16,12 +25,8 @@ hooks = [
         mask_size_warmup_ratio=0.25,
         mask_ratio_start=0.3,
         mask_ratio_base=1.0,
-        mask_ratio_end=1.0,
+        mask_ratio_end=1.5,
         mask_ratio_warmup_ratio=0.5,
-        density_factor_start=0.1,
-        density_factor_end=1.0,
-        density_factor_base=0.25,
-        density_factor_warmup_ratio=0.05,
     ),
     dict(type="SemSegEvaluator"),
     dict(type="CheckpointSaverWandb", save_freq=5),
@@ -32,26 +37,47 @@ hooks = [
 # Sculpting params
 sculpting_transform = dict(
     type="AdditiveMasking",
-    mode="sculpting",  # "Sculpting" or "Trimming"
+    mode="rand",  # "Sculpting" or "Trimming"
     sampling="chessboard",  # "chessboard" or "random" or "random_rotate"
-    density_factor=1.0,
-    mask_size_min=0.4,
+    density_factor="rand",
+    mask_size_min=0.1,
     mask_size_max=0.4,
     cell_size=0.02,
-    mask_feature_mode="null"
+    mask_feature_mode_1='null',
+    mask_feature_mode_2=None,
+    mask_dictname="mask",
 )
 
-model = dict(
-    type="DefaultSegmentor",
-    backbone=dict(
-        type="SpUNet-v1m1",
-        in_channels=3,
-        num_classes=3,
-        channels=(32, 64, 128, 256, 256, 128, 96, 96),
-        layers=(2, 3, 4, 6, 2, 2, 2, 2),
+voxelize_transform = dict(
+    type="VoxelizeAgg",
+    grid_size=0.02,
+    hash_type="fnv",
+    mode="train",
+    return_grid_coord=True,
+    follow_ref='mask',
+    how_to_agg_feats=dict(
+        coord="follow-1",
+        color="follow-2",
+        mask="max",
+        normal="follow-2",
     ),
-    criteria=[dict(type="CrossEntropyLoss", loss_weight=1.0, ignore_index=0)],
 )
+update_index_keys = dict(
+    type="Update",
+    keys_dict={
+        "index_valid_keys": [
+            "coord",
+            "grid_coord",
+            "color",
+            "normal",
+            "mask",
+        ]
+    },
+)
+
+tta_identity = [
+    [dict(type="RandomRotateTargetAngle", angle=[0], axis="z", center=[0, 0, 0], p=1)]
+]
 
 sculpting_data_base_configs = dict(
     num_classes=3,
@@ -63,32 +89,44 @@ sculpting_data_base_configs = dict(
     ],
 )
 
-voxelize_transform = dict(
-    type="VoxelizeAgg",
-    grid_size=0.02,
-    hash_type="fnv",
-    mode="train",
-    return_grid_coord=True,
-    how_to_agg_feats=dict(
-        coord="follow-mask",
-        color="follow-mask",
-        segment="max",
-        normal="follow-mask",
+model = dict(
+    type="Sculptor-v1m1",
+    backbone=dict(
+        type="SpUNet-v3m1",
+        in_channels=6,
+        num_classes=0,
+        channels=(32, 64, 128, 256, 256, 128, 96, 96),
+        layers=(2, 3, 4, 6, 2, 2, 2, 2),
     ),
+    #criteria=[dict(type="CrossEntropyLoss", loss_weight=1.0, ignore_index=0)],
+    head_in_channels=96,
+    sculpt_loss_weight=1 / 2,
+    reconstruct_loss_weight=1 / 2,
+    sculpt_original_point_weight=0,
+    sculpt_block_point_weight=1,
+    sculpt_mask_point_weight=1,
 )
-update_index_keys = dict(
-    type="Update",
-    keys_dict={
-        "index_valid_keys": [
-            "coord",
-            "grid_coord",
-            "color",
-            "normal",
-            "superpoint",
-            "strength",
-            "segment",
-        ]
-    },
+
+# optimizer = dict(type="AdamW", lr=0.04, weight_decay=0.04)
+# scheduler = dict(
+#     type="OneCycleLR",
+#     max_lr=optimizer["lr"],
+#     pct_start=0.05,
+#     anneal_strategy="cos",
+#     div_factor=10.0,
+#     final_div_factor=1000.0,
+# )
+
+
+# scheduler settings
+optimizer = dict(type="SGD", lr=0.1, momentum=0.8, weight_decay=0.0001, nesterov=True)
+scheduler = dict(
+    type="OneCycleLR",
+    max_lr=optimizer["lr"],
+    pct_start=0.05,
+    anneal_strategy="cos",
+    div_factor=10.0,
+    final_div_factor=10000.0,
 )
 
 # dataset settings
@@ -101,20 +139,30 @@ data = dict(
         type=dataset_type,
         split=[
             "train",
+            # "val",
+            # "test",
+            "arkit",
         ],
         data_root=data_root,
         transform=[
             dict(type="CenterShift", apply_z=True),
+            # dict(
+            #    type="RandomDropout", dropout_ratio=0.2, dropout_application_ratio=0.2
+            # ),
+            # dict(type="RandomRotateTargetAngle", angle=(1/2, 1, 3/2), center=[0, 0, 0], axis="z", p=0.75),
             dict(type="RandomRotate", angle=[-1, 1], axis="z", center=[0, 0, 0], p=1.0),
             dict(type="RandomRotate", angle=[-1 / 64, 1 / 64], axis="x", p=0.2),
             dict(type="RandomRotate", angle=[-1 / 64, 1 / 64], axis="y", p=0.2),
             dict(type="RandomScale", scale=[0.9, 1.1]),
+            # dict(type="RandomShift", shift=[0.2, 0.2, 0.2]),
             dict(type="RandomFlip", p=0.5),
             dict(type="RandomJitter", sigma=0.005, clip=0.02),
+            # dict(type="ElasticDistortion", distortion_params=[[0.2, 0.4], [0.8, 1.6]]),
             dict(type="ChromaticAutoContrast", p=0.2, blend_factor=None),
             dict(type="ChromaticTranslation", p=0.95, ratio=0.05),
             dict(type="ChromaticJitter", p=0.95, std=0.05),
-            dict(type="RandomColorDrop", p=0.2, color_augment=0.0),
+            # dict(type="HueSaturationTranslation", hue_max=0.2, saturation_max=0.2),
+            # dict(type="RandomColorDrop", p=0.2, color_augment=0.0),
             dict(type="SphereCrop", point_max=150000, mode="random"),
             update_index_keys,
             sculpting_transform,
@@ -122,11 +170,12 @@ data = dict(
             dict(type="SphereCrop", point_max=120000, mode="random"),
             dict(type="CenterShift", apply_z=False),
             dict(type="NormalizeColor"),
+            # dict(type="ShufflePoint"),
             dict(type="ToTensor"),
             dict(
                 type="Collect",
-                keys=("coord", "grid_coord", "segment","mask_balance"),
-                feat_keys=("color",),
+                keys=("coord", "grid_coord", "mask","mask_balance"),
+                feat_keys=("color","normal"),
             ),
         ],
         test_mode=False,
@@ -145,11 +194,12 @@ data = dict(
             voxelize_transform,
             dict(type="CenterShift", apply_z=False),
             dict(type="NormalizeColor"),
+            # dict(type="ShufflePoint"),
             dict(type="ToTensor"),
             dict(
                 type="Collect",
-                keys=("coord", "grid_coord", "segment","mask_balance"),
-                feat_keys=("color",),
+                keys=("coord", "grid_coord", "mask","mask_balance"),
+                feat_keys=("color","normal"),
             ),
         ],
         test_mode=False,

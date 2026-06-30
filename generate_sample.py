@@ -3,6 +3,9 @@ from pointcept.engines.defaults import (
     default_argument_parser,
     default_config_parser,
 )
+import pandas as pd
+from pypcd.pypcd import pandas_to_pypcd, encode_rgb_for_pcl
+
 from pointcept.engines.train import TRAINERS
 import sculpting
 import torch
@@ -22,47 +25,31 @@ if __name__=="__main__":
     trainer = TRAINERS.build(dict(type=cfg.train.type, cfg=cfg))
 
     train_loader = trainer.train_loader
-    i, b = next(enumerate(train_loader))
-
-    b
-
-    import pandas as pd
-    from pypcd.pypcd import pandas_to_pypcd
+    i, input_dict = next(enumerate(train_loader))
 
     # breakpoint()
     feat_key = 'feat'
     coord_key = 'coord'
     seg_key = 'segment'
 
-    c = (1+b[feat_key])/2
-    coord=b[coord_key]
-    seg_color=np.zeros_like(coord)
-    colors={
-        0: [1,0,0],
-        1: [0,1,0],
-        2: [0,0,1],
-    }
-    for s in np.unique(b[seg_key]):
-        seg_color[b[seg_key]==s] = colors.get(s, [0,0,0])
+    colors = input_dict[feat_key][:,:3]
+    c= (colors-colors.min())/(colors.max()-colors.min())
+    coord=input_dict[coord_key]
 
-    pandas_to_pypcd(
-        pd.DataFrame(dict(
+    rgb = encode_rgb_for_pcl((255*c).numpy().astype(np.uint8))
+
+    pc_data = pd.DataFrame(dict(
         x=coord[:,0],
         y=coord[:,1],
         z=coord[:,2],
-        red=seg_color[:,0]*255,
-        green=seg_color[:,1]*255,
-        blue=seg_color[:,2]*255,
-        ))
-    ).save("sample_seg.pcd")
+        rgb=rgb,
+        label=input_dict['segment'].numpy(),
+        **{f'feat_{i}':f for i,f in enumerate(input_dict[feat_key].T)}
+    ))
 
     pandas_to_pypcd(
-        pd.DataFrame(dict(
-        x=coord[:,0],
-        y=coord[:,1],
-        z=coord[:,2],
-        red=c[:,0]*255,
-        green=c[:,1]*255,
-        blue=c[:,2]*255,
-        ))
-    ).save("sample_rgb.pcd")
+        pc_data
+    ).save_pcd(
+        f"sample.pcd",
+        compression="binary_compressed"
+    )

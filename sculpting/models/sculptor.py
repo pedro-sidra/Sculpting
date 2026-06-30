@@ -77,7 +77,8 @@ class Sculptor(PointModel):
         self.sculpt_head = nn.Sequential(
             nn.Linear(head_in_channels, head_hidden_channels),
             nn.GELU(),
-            nn.Linear(head_hidden_channels, 2),
+            # Changed to 3 classes (0=Original, 1=Block, 2=Masked)
+            nn.Linear(head_hidden_channels, 3), 
         )
 
         self.reconstruct_head = nn.Sequential(
@@ -86,11 +87,15 @@ class Sculptor(PointModel):
             nn.Linear(head_hidden_channels, self.features_to_reconstruct),
         )
 
-        self.sculpt_weights = [
-            sculpt_original_point_weight,
-            sculpt_block_point_weight,
-            sculpt_mask_point_weight,
-        ]
+        # Register weights as a buffer so they automatically move to the correct device
+        self.register_buffer(
+            "sculpt_weights",
+            torch.tensor([
+                sculpt_original_point_weight,
+                sculpt_block_point_weight,
+                sculpt_mask_point_weight,
+            ], dtype=torch.float32)
+        )
 
     def before_step(self):
         super().before_step()
@@ -116,7 +121,6 @@ class Sculptor(PointModel):
             mask = data_dict["mask"]
             coord = data_dict["coord"]
             batch = offset2batch(data_dict["offset"])
-            grid_size = data_dict["grid_size"][0]
 
             masked_feats = feat.clone()
             masked_feats[mask != 0] = self.mask_token  # zero-out when masked or cube
@@ -125,44 +129,46 @@ class Sculptor(PointModel):
                 feat=masked_feats,
                 coord=coord,
                 offset=data_dict["offset"],
-                grid_size=grid_size,
                 mask=mask,  # masked points
             )
 
             # create result dictionary for return
             result_dict = dict(loss=[])
 
-        mask_global_point_ = self.backbone(mask_global_point)
+        backbone_out = self.backbone(mask_global_point)
+        
+        # SpUNet returns a raw tensor, while other backbones might return a Point object
+        backbone_feat = backbone_out if isinstance(backbone_out, torch.Tensor) else backbone_out.feat
 
-        sculpt_pred = self.sculpt_head(mask_global_point_.feat)
-        reconstruct_pred = self.reconstruct_head(mask_global_point_.feat)
+        sculpt_pred = self.sculpt_head(backbone_feat)
 
-        # predictions outside of sculpting blocks
-        pred_original_points = sculpt_pred[mask_global_point.mask == 0]
-        pred_block_points = sculpt_pred[mask_global_point.mask == 1]
-        pred_masked_points = sculpt_pred[mask_global_point.mask == 2]
+        # Compatible with Pointcept DefaultSegmentor for validation evaluation
+        if not self.training:
+            return dict(seg_logits=sculpt_pred)
 
-        lossfunc = nn.CrossEntropyLoss()
+        reconstruct_pred = self.reconstruct_head(backbone_feat)
 
-        result_dict["sculpt_loss"] = (
-            self.sculpt_weights[0]
-            * lossfunc(pred_original_points, torch.ones_like(pred_original_points))
-            + self.sculpt_weights[1]
-            * lossfunc(pred_block_points, torch.ones_like(pred_block_points))
-            + self.sculpt_weights[2]
-            * lossfunc(pred_masked_points, torch.ones_like(pred_masked_points))
-        )
+        # 1. Sculpt Loss (Standard CrossEntropy over the array weights)
+        sculpt_loss_fn = nn.CrossEntropyLoss(weight=self.sculpt_weights)
+        result_dict["sculpt_loss"] = sculpt_loss_fn(sculpt_pred, mask_global_point.mask.long())
         result_dict["loss"].append(result_dict["sculpt_loss"] * self.sculpt_loss_weight)
 
-        # result_dict["reconstruct_loss"] = (
-        #     torch.sum((reconstruct_pred[masked_points] - feat[masked_points]) ** 2)
-        #     + torch.sum((reconstruct_pred[block_points] - self.mask_token) ** 2)
-        # ) / (masked_points.nonzero() + block_points.nonzero())
-        # result_dict["loss"].append(
-        #     result_dict["reconstruct_loss"] * self.reconstruct_loss_weight
-        # )
+        # 2. Reconstruct Loss (L2 loss applied ONLY to points with mask == 2)
+        mask_2_idx = (mask_global_point.mask == 2)
+        if mask_2_idx.any():
+            reconstruct_loss_fn = nn.MSELoss()
+            result_dict["reconstruct_loss"] = reconstruct_loss_fn(reconstruct_pred[mask_2_idx], feat[mask_2_idx])
+        else:
+            # Dummy loss to prevent DDP unused parameter errors if no points match
+            result_dict["reconstruct_loss"] = reconstruct_pred.sum() * 0.0
+
+        result_dict["loss"].append(result_dict["reconstruct_loss"] * self.reconstruct_loss_weight)
+        
+        # Ensure mask_token always receives gradients (prevents DDP crash if no points are masked in a batch)
+        result_dict["loss"].append(self.mask_token.sum() * 0.0)
 
         result_dict["loss"] = sum(result_dict["loss"])
+        result_dict["seg_logits"] = sculpt_pred
 
         if get_world_size() > 1:
             for loss in result_dict.values():

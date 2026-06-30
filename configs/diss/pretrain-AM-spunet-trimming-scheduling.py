@@ -1,11 +1,11 @@
 _base_ = ["../_base_/default_runtime.py"]
 
 # misc custom setting
-batch_size = 96  # bs: total bs in all gpus
+batch_size = 32  # bs: total bs in all gpus
 num_worker = 32
 mix_prob = 0
 empty_cache = False
-enable_amp = True
+enable_amp = False
 amp_dtype = "bfloat16"
 evaluate = True
 find_unused_parameters = False
@@ -25,7 +25,7 @@ hooks = [
         mask_size_warmup_ratio=0.25,
         mask_ratio_start=0.3,
         mask_ratio_base=1.0,
-        mask_ratio_end=1.0,
+        mask_ratio_end=1.5,
         mask_ratio_warmup_ratio=0.5,
     ),
     dict(type="SemSegEvaluator"),
@@ -37,12 +37,13 @@ hooks = [
 # Sculpting params
 sculpting_transform = dict(
     type="AdditiveMasking",
-    mode="Trimming",  # "Sculpting" or "Trimming"
+    mode="rand",  # "Sculpting" or "Trimming"
     sampling="chessboard",  # "chessboard" or "random" or "random_rotate"
-    density_factor=1,
-    mask_size_min=0.4,
+    density_factor="rand",
+    mask_size_min=0.1,
     mask_size_max=0.4,
     cell_size=0.02,
+    mask_feature_mode='rand'
 )
 
 voxelize_transform = dict(
@@ -52,10 +53,10 @@ voxelize_transform = dict(
     mode="train",
     return_grid_coord=True,
     how_to_agg_feats=dict(
-        coord="mean",
-        color="mean",
+        coord="follow-mask",
+        color="follow-mask",
         segment="max",
-        normal="first",
+        normal="follow-mask",
     ),
 )
 update_index_keys = dict(
@@ -66,8 +67,6 @@ update_index_keys = dict(
             "grid_coord",
             "color",
             "normal",
-            "superpoint",
-            "strength",
             "segment",
         ]
     },
@@ -91,7 +90,7 @@ model = dict(
     type="DefaultSegmentor",
     backbone=dict(
         type="SpUNet-v1m1",
-        in_channels=3,
+        in_channels=6,
         num_classes=3,
         channels=(32, 64, 128, 256, 256, 128, 96, 96),
         layers=(2, 3, 4, 6, 2, 2, 2, 2),
@@ -167,7 +166,7 @@ data = dict(
             dict(
                 type="Collect",
                 keys=("coord", "grid_coord", "segment","mask_balance"),
-                feat_keys=("color",),
+                feat_keys=("color","normal"),
             ),
         ],
         test_mode=False,
@@ -191,7 +190,7 @@ data = dict(
             dict(
                 type="Collect",
                 keys=("coord", "grid_coord", "segment","mask_balance"),
-                feat_keys=("color",),
+                feat_keys=("color","normal"),
             ),
         ],
         test_mode=False,
