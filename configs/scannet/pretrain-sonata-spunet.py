@@ -6,8 +6,8 @@ Dataset: ScanNet v2, ScanNet++, S3DIS, HM3D, ArkitScene, Structured3D
 _base_ = ["../_base_/default_runtime.py"]
 
 # misc custom setting
-batch_size = 16  # bs: total bs in all gpus
-num_worker = 16
+batch_size = 32  # bs: total bs in all gpus
+num_worker = 32
 mix_prob = 0
 clip_grad = 3.0
 empty_cache = False
@@ -21,7 +21,7 @@ model = dict(
     # backbone - student & teacher
     backbone=dict(
         type="SpUNet-v3m1",
-        in_channels=3,
+        in_channels=6,
         num_classes=0,
         channels=(32, 64, 128, 256, 256, 128, 96, 96),
         layers=(2, 3, 4, 6, 2, 2, 2, 2),
@@ -145,17 +145,19 @@ transform = [
             "global_origin_coord",
             "global_coord",
             "global_color",
+            "global_normal",
             "global_offset",
             "local_origin_coord",
             "local_coord",
             "local_color",
+            "local_normal",
             "local_offset",
             "grid_size",
             "name",
         ),
         offset_keys_dict=dict(),
-        global_feat_keys=("global_color",),
-        local_feat_keys=("local_color",),
+        global_feat_keys=("global_color","global_normal"),
+        local_feat_keys=("local_color","local_normal"),
     ),
 ]
 
@@ -168,8 +170,8 @@ data = dict(
         type=dataset_type,
         split=[
             "train",
-            "val",
-            "test",
+            # "val",
+            # "test",
         ],
         data_root=data_root,
         transform=transform,
