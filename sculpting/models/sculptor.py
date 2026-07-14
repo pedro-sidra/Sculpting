@@ -37,12 +37,6 @@ class Sculptor(PointModel):
         backbone,
         head_in_channels,
         head_hidden_channels=256,
-        mask_size_start=0.1,
-        mask_size_base=0.4,
-        mask_size_warmup_ratio=0.05,
-        mask_ratio_start=0.3,
-        mask_ratio_base=0.7,
-        mask_ratio_warmup_ratio=0.05,
         # Sculpting
         sculpt_loss_weight=1 / 2,
         reconstruct_loss_weight=1 / 2,
@@ -51,19 +45,6 @@ class Sculptor(PointModel):
         sculpt_mask_point_weight=1,
     ):
         super(Sculptor, self).__init__()
-
-        # masking and scheduler
-        self.mask_size = mask_size_start
-        self.mask_size_start = mask_size_start
-        self.mask_size_base = mask_size_base
-        self.mask_size_warmup_ratio = mask_size_warmup_ratio
-        self.mask_size_scheduler = None
-
-        self.mask_ratio = mask_ratio_start
-        self.mask_ratio_start = mask_ratio_start
-        self.mask_ratio_base = mask_ratio_base
-        self.mask_ratio_warmup_ratio = mask_ratio_warmup_ratio
-        self.mask_ratio_scheduler = None
 
         self.backbone = build_model(backbone)
 
@@ -88,28 +69,13 @@ class Sculptor(PointModel):
         )
 
         # Register weights as a buffer so they automatically move to the correct device
-        self.register_buffer(
-            "sculpt_weights",
-            torch.tensor([
-                sculpt_original_point_weight,
-                sculpt_block_point_weight,
-                sculpt_mask_point_weight,
-            ], dtype=torch.float32)
-        )
+        self.sculpt_loss_fn = nn.CrossEntropyLoss(weight=1.0*torch.tensor([
+            sculpt_original_point_weight,
+            sculpt_block_point_weight,
+            sculpt_mask_point_weight,
+        ]))
+        self.reconstruct_loss_fn= nn.MSELoss()
 
-    def before_step(self):
-        super().before_step()
-        self.trainer.comm_info["input_dict"]["mask_size"] = self.mask_size
-        self.trainer.comm_info["input_dict"]["mask_ratio"] = self.mask_ratio
-
-        current_epoch = self.trainer.epoch + 1
-        if self.trainer.writer is not None:
-            self.trainer.writer.add_scalar(
-                "params/mask_size", self.mask_size, current_epoch
-            )
-            self.trainer.writer.add_scalar(
-                "params/mask_ratio", self.mask_ratio, current_epoch
-            )
 
     def forward(self, data_dict):
 
@@ -118,8 +84,9 @@ class Sculptor(PointModel):
 
             # global_point & masking
             feat = data_dict["feat"]
-            mask = data_dict["mask"]
+            mask = data_dict["segment"]
             coord = data_dict["coord"]
+            grid_coord = data_dict["grid_coord"]
             batch = offset2batch(data_dict["offset"])
 
             masked_feats = feat.clone()
@@ -130,6 +97,7 @@ class Sculptor(PointModel):
                 coord=coord,
                 offset=data_dict["offset"],
                 mask=mask,  # masked points
+                grid_coord=grid_coord
             )
 
             # create result dictionary for return
@@ -143,21 +111,17 @@ class Sculptor(PointModel):
         sculpt_pred = self.sculpt_head(backbone_feat)
 
         # Compatible with Pointcept DefaultSegmentor for validation evaluation
-        if not self.training:
-            return dict(seg_logits=sculpt_pred)
 
         reconstruct_pred = self.reconstruct_head(backbone_feat)
 
         # 1. Sculpt Loss (Standard CrossEntropy over the array weights)
-        sculpt_loss_fn = nn.CrossEntropyLoss(weight=self.sculpt_weights)
-        result_dict["sculpt_loss"] = sculpt_loss_fn(sculpt_pred, mask_global_point.mask.long())
+        result_dict["sculpt_loss"] = self.sculpt_loss_fn(sculpt_pred, mask_global_point.mask.long())
         result_dict["loss"].append(result_dict["sculpt_loss"] * self.sculpt_loss_weight)
 
         # 2. Reconstruct Loss (L2 loss applied ONLY to points with mask == 2)
         mask_2_idx = (mask_global_point.mask == 2)
         if mask_2_idx.any():
-            reconstruct_loss_fn = nn.MSELoss()
-            result_dict["reconstruct_loss"] = reconstruct_loss_fn(reconstruct_pred[mask_2_idx], feat[mask_2_idx])
+            result_dict["reconstruct_loss"] = self.reconstruct_loss_fn(reconstruct_pred[mask_2_idx], feat[mask_2_idx])
         else:
             # Dummy loss to prevent DDP unused parameter errors if no points match
             result_dict["reconstruct_loss"] = reconstruct_pred.sum() * 0.0
@@ -168,10 +132,11 @@ class Sculptor(PointModel):
         result_dict["loss"].append(self.mask_token.sum() * 0.0)
 
         result_dict["loss"] = sum(result_dict["loss"])
-        result_dict["seg_logits"] = sculpt_pred
 
-        if get_world_size() > 1:
-            for loss in result_dict.values():
-                dist.all_reduce(loss, op=dist.ReduceOp.AVG)
+        if self.training:
+            pass
+        else:
+            result_dict["seg_logits"] = sculpt_pred
+
 
         return result_dict

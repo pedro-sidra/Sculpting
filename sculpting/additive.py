@@ -221,16 +221,24 @@ class AdditiveMasking(object):
         self._get_trimming_block_fn = get_trimming_block
         self._get_sculpting_block_fn = get_sculpting_block
 
+        if self.sampling.startswith("c"): # chessboard
+            # For chessboard sampling, we want a fixed block size
+            self.mask_size_min = mask_size_max 
+
     def balance_npoint_frac(self, current_ncells_min, current_ncells_max, active_mode, active_density_factor):
         if active_mode.lower().startswith("t"):
             actual_density_factor = 0.15
         else:
             actual_density_factor = active_density_factor
+            
+        # Prevent division by zero if density factor is exactly 0. 
+        # Fall back to 0.1 just for computing K so we still sample the same amount of mask centerpoints.
+        safe_density_factor = actual_density_factor if actual_density_factor > 0 else 0.5
 
         if self.sampling.startswith("c"): # chessboard
-            self.npoint_frac = self.mask_ratio / (actual_density_factor * max(1, current_ncells_max**3))
+            self.npoint_frac = self.mask_ratio / (safe_density_factor * max(1, current_ncells_max**3))
         else: # random or random_rotate
-            self.npoint_frac = self.mask_ratio * 8 / (actual_density_factor * max(1, (current_ncells_max+current_ncells_min+1)**3))
+            self.npoint_frac = self.mask_ratio * 8 / (safe_density_factor * max(1, (current_ncells_max+current_ncells_min+1)**3))
 
     def __call__(self, data_dict):
         """
@@ -408,7 +416,12 @@ class AdditiveMasking(object):
                 block_normals = np.vstack(_block_normals)
 
             # Optimization: Uniformly subsample the aggregated blocks
-            if active_density_factor is not None and active_density_factor < 1.0:
+            if active_density_factor == 0:
+                # density_factor = 0 edge case: wipe the generated blocks entirely
+                block_coords = np.empty((0, 3), dtype=np.float32)
+                if color is not None: block_colors = np.empty((0, color.shape[1]), dtype=np.float32)
+                if normal is not None: block_normals = np.empty((0, normal.shape[1]), dtype=np.float32)
+            elif active_density_factor is not None and active_density_factor < 1.0:
                 num_total_added = len(block_coords)
                 num_to_keep = max(1, int(num_total_added * active_density_factor))
                 choices = np.random.choice(num_total_added, num_to_keep, replace=False)
@@ -425,6 +438,7 @@ class AdditiveMasking(object):
             # 4. Set labels of added blocks to 1
             final_mask = np.hstack([orig_mask, np.ones(len(block_coords), dtype=np.int32)])
             data_dict[self.mask_dictname] = final_mask
+            data_dict['segment'] = final_mask
             if color is not None:
                 final_color = np.vstack([color, block_colors]).astype(np.float32)
                 
@@ -470,6 +484,7 @@ class AdditiveMasking(object):
             data_dict["mask_balance"] = float(mask_balance)
         else:
             data_dict[self.mask_dictname] = orig_mask
+            data_dict['segment'] = orig_mask
             data_dict["mask_balance"] = 0.0
 
             # Even if no blocks were added, we might need to overwrite masked (2) point features
