@@ -14,7 +14,6 @@ hooks = [
     # dict(type="PreciseEvaluator", test_last=False),
 ]
 
-seed=35910445
 
 # misc custom setting
 batch_size = 12  # bs: total bs in all gpus
@@ -48,7 +47,7 @@ model = dict(
     backbone_out_channels=72,
     backbone=dict(
         type="LitePT-v1",
-        in_channels=6,
+        in_channels=9,
         order=("z", "z-trans", "hilbert", "hilbert-trans"),
         stride=(2, 2, 2, 2),
         enc_depths=(2, 2, 2, 6, 2),
@@ -146,7 +145,7 @@ data = dict(
             dict(
                 type="Collect",
                 keys=("coord", "grid_coord", "segment"),
-                feat_keys=("coord","color",),
+                feat_keys=("coord","color","normal",),
             ),
         ],
         test_mode=False,
@@ -170,7 +169,7 @@ data = dict(
             dict(
                 type="Collect",
                 keys=("coord", "grid_coord", "segment"),
-                feat_keys=("coord","color",),
+                feat_keys=("coord","color","normal",),
             ),
         ],
         test_mode=False,
@@ -200,7 +199,7 @@ data = dict(
                 dict(
                     type="Collect",
                     keys=("coord", "grid_coord", "index"),
-                    feat_keys=("coord","color",),
+                feat_keys=("coord","color","normal",),
                 ),
             ],
             aug_transform=[

@@ -16,7 +16,7 @@ if __name__=="__main__":
     config_file = sys.argv[1]
 
     args = default_argument_parser().parse_args(
-        f"--config-file {config_file} --num-gpus 0 --options num_workers=0 num_worker_per_gpu=0 batch_size=2".split()
+        f"--config-file {config_file} --num-gpus 0 --options num_workers=0 num_worker_per_gpu=0 batch_size=1".split()
     )
     cfg = default_config_parser(args.config_file, args.options)
 
@@ -43,7 +43,7 @@ if __name__=="__main__":
         y=coord[:,1],
         z=coord[:,2],
         rgb=rgb,
-        label=input_dict['segment'].numpy(),
+        segment=input_dict['segment'].numpy().astype(np.int32),
         **{f'feat_{i}':f for i,f in enumerate(input_dict[feat_key].T)}
     ))
 

@@ -1,6 +1,8 @@
 import numpy as np
 import torch
 from scipy.spatial.transform import Rotation as R
+
+# Assuming these are available in your local module path
 from .sculpting_ops import  get_pointgrid
 from .trimming import get_perlin
 
@@ -17,6 +19,7 @@ def get_trimming_block(num_cells, cell_size):
         noise_num_cells=np.ones(3) * 2 * (int(num_cells) // 2),
         noise_cell_size=cell_size,
     ).T
+
 
 @HOOKS.register_module()
 class AdditiveMaskSizeScheduler(HookBase):
@@ -101,9 +104,24 @@ class AdditiveMaskSizeScheduler(HookBase):
 
         # 2. Worker schedulers (injected into the transform before DataLoader workers spawn)
         dataset = self.trainer.train_loader.dataset
-        transform = self.find_additive_masking(dataset.transform)
         
-        if transform is not None:
+        target_transforms = []
+
+        def extract_transforms(ds):
+            """Recursively extract AdditiveMasking transforms from Dataset or ConcatDataset structures"""
+            if hasattr(ds, "datasets"):
+                # Handle ConcatDataset
+                for sub_ds in ds.datasets:
+                    extract_transforms(sub_ds)
+            elif hasattr(ds, "transform"):
+                # Handle standard Pointcept dataset
+                t = self.find_additive_masking(ds.transform)
+                if t is not None:
+                    target_transforms.append(t)
+
+        extract_transforms(dataset)
+        
+        if len(target_transforms) > 0:
             batch_size = getattr(self.trainer.train_loader, "batch_size", 1)
             num_workers = max(1, getattr(self.trainer.train_loader, "num_workers", 1))
             
@@ -112,33 +130,44 @@ class AdditiveMaskSizeScheduler(HookBase):
             worker_total_iters = int(total_steps * samples_per_step_per_worker)
             worker_curr_iter = int(curr_step * samples_per_step_per_worker)
 
-            transform.mask_size_scheduler = CosineScheduler(
+            # Initialize shared schedulers once
+            worker_mask_size_scheduler = CosineScheduler(
                 start_value=self.mask_size_start,
                 base_value=self.mask_size_base,
                 final_value=self.mask_size_end,
                 warmup_iters=int(worker_total_iters * self.mask_size_warmup_ratio),
                 total_iters=worker_total_iters,
             )
-            transform.mask_size_scheduler.iter = worker_curr_iter
+            worker_mask_size_scheduler.iter = worker_curr_iter
             
-            transform.mask_ratio_scheduler = CosineScheduler(
+            worker_mask_ratio_scheduler = CosineScheduler(
                 start_value=self.mask_ratio_start,
                 base_value=self.mask_ratio_base,
                 final_value=self.mask_ratio_end,
                 warmup_iters=int(worker_total_iters * self.mask_ratio_warmup_ratio),
                 total_iters=worker_total_iters,
             )
-            transform.mask_ratio_scheduler.iter = worker_curr_iter
+            worker_mask_ratio_scheduler.iter = worker_curr_iter
             
+            worker_density_factor_scheduler = None
             if self.density_factor_start is not None:
-                transform.density_factor_scheduler = CosineScheduler(
+                worker_density_factor_scheduler = CosineScheduler(
                     start_value=self.density_factor_start,
                     base_value=self.density_factor_base,
                     final_value=self.density_factor_end,
                     warmup_iters=int(worker_total_iters * self.density_factor_warmup_ratio),
                     total_iters=worker_total_iters,
                 )
-                transform.density_factor_scheduler.iter = worker_curr_iter
+                worker_density_factor_scheduler.iter = worker_curr_iter
+
+            # Inject the EXACT SAME scheduler instances across all underlying datasets.
+            # Thus, if a single worker retrieves samples from different subsets in a ConcatDataset,
+            # the local worker step progresses exactly once per sample pulled.
+            for transform in target_transforms:
+                transform.mask_size_scheduler = worker_mask_size_scheduler
+                transform.mask_ratio_scheduler = worker_mask_ratio_scheduler
+                if worker_density_factor_scheduler is not None:
+                    transform.density_factor_scheduler = worker_density_factor_scheduler
 
     def before_step(self):
         # We step the main process logging schedulers. 
@@ -165,7 +194,6 @@ class AdditiveMaskSizeScheduler(HookBase):
                     density_factor,
                     self.density_factor_scheduler.iter,
                 )
-
 
 @TRANSFORMS.register_module()
 class AdditiveMasking(object):
@@ -439,6 +467,7 @@ class AdditiveMasking(object):
             final_mask = np.hstack([orig_mask, np.ones(len(block_coords), dtype=np.int32)])
             data_dict[self.mask_dictname] = final_mask
             data_dict['segment'] = final_mask
+            
             if color is not None:
                 final_color = np.vstack([color, block_colors]).astype(np.float32)
                 

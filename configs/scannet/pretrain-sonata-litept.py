@@ -6,12 +6,12 @@ enable_wandb = False
 ## ===== MODEL DEFINITION
 
 # misc custom setting
-batch_size = 16  # bs: total bs in all gpus
-num_worker = 16
+batch_size = 98  # bs: total bs in all gpus
+num_worker = 98
 mix_prob = 0
 clip_grad = 3.0
 empty_cache = False
-enable_amp = True
+enable_amp = False
 evaluate = False
 find_unused_parameters = False
 
@@ -22,7 +22,7 @@ model = dict(
     # backbone - student & teacher
     backbone=dict(
         type="LitePT-v1",
-        in_channels=3,
+        in_channels=9,
         order=("z", "z-trans", "hilbert", "hilbert-trans"),
         stride=(2, 2, 2, 2),
         enc_depths=(2, 2, 2, 6, 2),
@@ -49,7 +49,11 @@ model = dict(
         pre_norm=True,
         enc_mode=True,
     ),
-    teacher_custom=dict(),
+    teacher_custom=dict(
+        attn_drop=0.0,
+        proj_drop=0.0,
+        drop_path=0.0,
+    ),
     head_in_channels=900,
     head_hidden_channels=256,
     head_embed_channels=256,
@@ -67,9 +71,9 @@ model = dict(
     teacher_temp_base=0.07,
     teacher_temp_warmup_ratio=0.05,
     student_temp=0.1,
-    mask_loss_weight=2 / 12,
-    roll_mask_loss_weight=2 / 12,
-    unmask_loss_weight=4 / 12,
+    mask_loss_weight=2 / 8,
+    roll_mask_loss_weight=2 / 8,
+    unmask_loss_weight=4 / 8,
     # sculpt_loss_weight=4 / 12,
     momentum_base=0.994,
     momentum_final=1,
@@ -104,7 +108,7 @@ transform = [
     dict(type="Copy", keys_dict={"coord": "origin_coord"}),
     dict(
         type="MultiViewGenerator",
-        view_keys=("coord", "origin_coord", "color"),
+        view_keys=("coord", "origin_coord", "color", "normal"),
         global_view_num=2,
         global_view_scale=(0.4, 1.0),
         local_view_num=4,
@@ -163,20 +167,22 @@ transform = [
         keys=(
             "global_origin_coord",
             "global_coord",
+            "global_normal",
             "global_color",
             "global_offset",
             # "global_mask",
             "local_origin_coord",
             "local_coord",
             "local_color",
+            "local_normal",
             "local_offset",
             # "local_mask",
             "grid_size",
             "name",
         ),
         offset_keys_dict=dict(),
-        global_feat_keys=("global_color",),
-        local_feat_keys=("local_color",),
+        global_feat_keys=("global_coord", "global_color", "global_normal"),
+        local_feat_keys=("local_coord", "local_color", "local_normal"),
     ),
 ]
 
@@ -186,15 +192,68 @@ data_root = "data/scannet"
 
 data = dict(
     train=dict(
-        type=dataset_type,
-        split=[
-            "train",
-            "val",
-            "test",
+        type="ConcatDataset",
+        datasets=[
+            # ScanNet
+            dict(
+                type="ScanNetDataset",
+                split=["train", "val", "test"],
+                data_root="data/scannet",
+                transform=transform,
+                test_mode=False,
+                loop=1,
+            ),
+            # ScanNet++
+            dict(
+                type="ScanNetPPDataset",
+                split=[
+                    "train_grid1mm_chunk6x6_stride3x3",
+                    "val_grid1mm_chunk6x6_stride3x3",
+                    "test_grid1mm_chunk6x6_stride3x3",
+                ],
+                data_root="data/scannetpp",
+                transform=transform,
+                test_mode=False,
+                loop=1,
+            ),
+            # S3DIS
+            dict(
+                type="S3DISDataset",
+                split=["Area_1", "Area_2", "Area_3", "Area_4", "Area_5", "Area_6"],
+                data_root="data/s3dis",
+                transform=transform,
+                test_mode=False,
+                loop=1,
+            ),
+            # ArkitScenes
+            dict(
+                type="DefaultDataset",
+                split=["Training", "Validation"],
+                data_root="data/arkitscenes",
+                transform=transform,
+                test_mode=False,
+                loop=1,
+            ),
+            # HM3D
+            dict(
+                type="HM3DDataset",
+                split=["train", "val"],
+                data_root="data/hm3d",
+                transform=transform,
+                test_mode=False,
+                force_label=False,
+                loop=1,
+            ),
+            # Structured3D
+            dict(
+                type="Structured3DDataset",
+                split=["train", "val", "test"],
+                data_root="data/structured3d",
+                transform=transform,
+                test_mode=False,
+                loop=1,
+            ),
         ],
-        data_root=data_root,
-        transform=transform,
-        test_mode=False,
     ),
 )
 

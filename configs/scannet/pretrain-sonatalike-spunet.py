@@ -6,10 +6,10 @@ enable_wandb = False
 # Sculpting params
 sculpting_transform = dict(
     type="AdditiveMasking",
-    mode="trimming",  # "Sculpting" or "Trimming"
+    mode="rand",  # "Sculpting" or "Trimming"
     sampling="chessboard",  # "chessboard" or "random" or "random_rotate"
-    density_factor=1.0,
-    mask_size_min=0.4,
+    density_factor="rand",
+    mask_size_min=0.1,
     mask_size_max=0.4,
     cell_size=0.02,
     mask_dictname="mask"
@@ -21,11 +21,12 @@ voxelize_transform = dict(
     hash_type="fnv",
     mode="train",
     return_grid_coord=True,
+    follow_ref='mask',
     how_to_agg_feats=dict(
-        coord="mean",
-        color="mean",
-        normal="first",
-        mask="max",
+        coord="follow-1",
+        color="follow-2",
+        mask="follow-2",
+        normal="follow-2",
     ),
 )
 
@@ -45,12 +46,12 @@ update_index_keys = dict(
 ## ===== MODEL DEFINITION
 
 # misc custom setting
-batch_size = 16  # bs: total bs in all gpus
-num_worker = 16
+batch_size = 32  # bs: total bs in all gpus
+num_worker = 32
 mix_prob = 0
 clip_grad = 3.0
 empty_cache = False
-enable_amp = True
+enable_amp = False
 evaluate = False
 find_unused_parameters = False
 
@@ -61,7 +62,7 @@ model = dict(
     # backbone - student & teacher
     backbone=dict(
         type="SpUNet-v3m1",
-        in_channels=3,
+        in_channels=6,
         num_classes=0,
         channels=(32, 64, 128, 256, 256, 128, 96, 96),
         layers=(2, 3, 4, 6, 2, 2, 2, 2),
@@ -85,9 +86,9 @@ model = dict(
     teacher_temp_base=0.07,
     teacher_temp_warmup_ratio=0.05,
     student_temp=0.1,
-    mask_loss_weight=2 / 12,
-    roll_mask_loss_weight=2 / 12,
-    unmask_loss_weight=4 / 12,
+    mask_loss_weight=2 / 8,
+    roll_mask_loss_weight=2 / 8,
+    unmask_loss_weight=4 / 8,
     # sculpt_loss_weight=4 / 12,
     momentum_base=0.994,
     momentum_final=1,
@@ -122,7 +123,7 @@ transform = [
     dict(type="Copy", keys_dict={"coord": "origin_coord"}),
     dict(
         type="MultiViewGenerator",
-        view_keys=("coord", "origin_coord", "color", "mask"),
+        view_keys=("coord", "origin_coord", "color", "normal", "mask"),
         global_view_num=2,
         global_view_scale=(0.4, 1.0),
         local_view_num=4,
@@ -182,19 +183,21 @@ transform = [
             "global_origin_coord",
             "global_coord",
             "global_color",
+            "global_normal",
             "global_offset",
             "global_mask",
             "local_origin_coord",
             "local_coord",
             "local_color",
+            "local_normal",
             "local_offset",
             "local_mask",
             "grid_size",
             "name",
         ),
         offset_keys_dict=dict(),
-        global_feat_keys=("global_color",),
-        local_feat_keys=("local_color",),
+        global_feat_keys=("global_color","global_normal"),
+        local_feat_keys=("local_color","local_normal"),
     ),
 ]
 
@@ -207,8 +210,8 @@ data = dict(
         type=dataset_type,
         split=[
             "train",
-            "val",
-            "test",
+            # "val",
+            # "test",
         ],
         data_root=data_root,
         transform=transform,
@@ -223,16 +226,16 @@ hooks = [
     dict(type="WeightDecaySchedular", base_value=base_wd, final_value=final_wd),
     dict(type="IterationTimer", warmup_iter=2),
     dict(type="InformationWriter"),
-    dict(type="AdditiveMaskSizeScheduler",
-        mask_size_start=0.1,
-        mask_size_base=0.4,
-        mask_size_end=0.4,
-        mask_size_warmup_ratio=0.25,
-        mask_ratio_start=0.3,
-        mask_ratio_base=1.0,
-        mask_ratio_end=1.0,
-        mask_ratio_warmup_ratio=0.5,
-    ),
+    # dict(type="AdditiveMaskSizeScheduler",
+    #     mask_size_start=0.1,
+    #     mask_size_base=0.4,
+    #     mask_size_end=0.4,
+    #     mask_size_warmup_ratio=0.25,
+    #     mask_ratio_start=0.3,
+    #     mask_ratio_base=1.0,
+    #     mask_ratio_end=1.0,
+    #     mask_ratio_warmup_ratio=0.5,
+    # ),
     dict(type="SemSegEvaluator"),
     dict(type="CheckpointSaverWandb", save_freq=5),
     dict(type="MaskBalanceLoggingHook"),

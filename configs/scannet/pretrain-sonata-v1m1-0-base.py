@@ -6,8 +6,8 @@ Dataset: ScanNet v2, ScanNet++, S3DIS, HM3D, ArkitScene, Structured3D
 _base_ = ["../_base_/default_runtime.py"]
 
 # misc custom setting
-batch_size = 96  # bs: total bs in all gpus
-num_worker = 96
+batch_size = 98  # bs: total bs in all gpus
+num_worker = 98
 mix_prob = 0
 clip_grad = 3.0
 empty_cache = False
@@ -22,14 +22,24 @@ model = dict(
     type="Sonata-v1m1",
     # backbone - student & teacher
     backbone=dict(
-        type="PT-v3m2",
+        type="LitePT-v1",
         in_channels=9,
         order=("z", "z-trans", "hilbert", "hilbert-trans"),
         stride=(2, 2, 2, 2),
-        enc_depths=(3, 3, 3, 12, 3),
-        enc_channels=(48, 96, 192, 384, 512),
-        enc_num_head=(3, 6, 12, 24, 32),
+        enc_depths=(2, 2, 2, 6, 2),
+        enc_channels=(36, 72, 144, 252, 504),
+        enc_num_head=(2, 4, 8, 14, 28),
         enc_patch_size=(1024, 1024, 1024, 1024, 1024),
+        enc_conv=(True, True, True, False, False),
+        enc_attn=(False, False, False, True, True),
+        enc_rope_freq=(100.0, 100.0, 100.0, 100.0, 100.0),
+        dec_depths=(2, 2, 2, 2),
+        dec_channels=(72, 72, 144, 252),
+        dec_num_head=(4, 4, 8, 14),
+        dec_patch_size=(1024, 1024, 1024, 1024),
+        dec_conv=(True, True, True, False),
+        dec_attn=(False, False, False, True),
+        dec_rope_freq=(100.0, 100.0, 100.0, 100.0),
         mlp_ratio=4,
         qkv_bias=True,
         qk_scale=None,
@@ -38,21 +48,15 @@ model = dict(
         drop_path=0.3,
         shuffle_orders=True,
         pre_norm=True,
-        enable_rpe=False,
-        enable_flash=True,
-        upcast_attention=False,
-        upcast_softmax=False,
-        traceable=True,
         enc_mode=True,
-        mask_token=True,
     ),
     teacher_custom=dict(
         attn_drop=0.0,
         proj_drop=0.0,
         drop_path=0.0,
     ),
-    head_in_channels=1088,
-    head_hidden_channels=4096,
+    head_in_channels=900,
+    head_hidden_channels=2048,
     head_embed_channels=256,
     head_num_prototypes=4096,
     num_global_view=2,
@@ -255,10 +259,10 @@ data = dict(
 )
 
 hooks = [
-    dict(type="CheckpointLoader"),
+    dict(type="CheckpointLoaderAllowMismatch", strict=False),
     dict(type="ModelHook"),
     dict(type="WeightDecaySchedular", base_value=base_wd, final_value=final_wd),
     dict(type="IterationTimer", warmup_iter=2),
     dict(type="InformationWriter"),
-    dict(type="CheckpointSaver", save_freq=5),
+    dict(type="CheckpointSaverWandb", save_freq=5),
 ]

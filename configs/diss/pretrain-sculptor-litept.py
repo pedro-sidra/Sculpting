@@ -1,18 +1,15 @@
 _base_ = ["../_base_/default_runtime.py"]
 
+epoch = 100
 # misc custom setting
-batch_size = 98  # bs: total bs in all gpus
-num_worker = 98
-mix_prob = 0
+batch_size = 32  # bs: total bs in all gpus
+num_worker = 32
+mix_prob = 0.0
+clip_grad = 1.0
 empty_cache = False
 enable_amp = False
-amp_dtype = "bfloat16"
-evaluate = False
 find_unused_parameters = False
-
-epoch=100
-eval_epoch=100
-
+evaluate=False
 
 hooks = [
     dict(type="CheckpointLoaderAllowMismatch"),
@@ -34,12 +31,23 @@ hooks = [
     # dict(type="PreciseEvaluator", test_last=False),
 ]
 
+optimizer = dict(type="AdamW", lr=0.006, weight_decay=0.05)
+scheduler = dict(
+    type="OneCycleLR",
+    max_lr=[0.006, 0.0006],
+    pct_start=0.05,
+    anneal_strategy="cos",
+    div_factor=10.0,
+    final_div_factor=1000.0,
+)
+param_dicts = [dict(keyword="block", lr=0.0006)]
+
 # Sculpting params
 sculpting_transform = dict(
     type="AdditiveMasking",
-    mode="rand",  # "Sculpting" or "Trimming"
+    mode="trimming",  # "Sculpting" or "Trimming"
     sampling="chessboard",  # "chessboard" or "random" or "random_rotate"
-    density_factor="rand",
+    density_factor="1",
     mask_size_min=0.1,
     mask_size_max=0.4,
     cell_size=0.02,
@@ -93,59 +101,48 @@ sculpting_data_base_configs = dict(
 model = dict(
     type="Sculptor-v1m1",
     backbone=dict(
-        type="SpUNet-v3m1",
-        in_channels=6,
-        num_classes=0,
-        channels=(32, 64, 128, 256, 256, 128, 96, 96),
-        layers=(2, 3, 4, 6, 2, 2, 2, 2),
+        type="LitePT-v1",
+        in_channels=9,
+        order=("z", "z-trans", "hilbert", "hilbert-trans"),
+        stride=(2, 2, 2, 2),
+        enc_depths=(2, 2, 2, 6, 2),
+        enc_channels=(36, 72, 144, 252, 504),
+        enc_num_head=(2, 4, 8, 14, 28),
+        enc_patch_size=(1024, 1024, 1024, 1024, 1024),
+        enc_conv=(True, True, True, False, False),
+        enc_attn=(False, False, False, True, True),
+        enc_rope_freq=(100.0, 100.0, 100.0, 100.0, 100.0),
+        dec_depths=(2, 2, 2, 2),
+        dec_channels=(72, 72, 144, 252),
+        dec_num_head=(4, 4, 8, 14),
+        dec_patch_size=(1024, 1024, 1024, 1024),
+        dec_conv=(True, True, True, False),
+        dec_attn=(False, False, False, True),
+        dec_rope_freq=(100.0, 100.0, 100.0, 100.0),
+        mlp_ratio=4,
+        qkv_bias=True,
+        qk_scale=None,
+        attn_drop=0.0,
+        proj_drop=0.0,
+        drop_path=0.3,
+        shuffle_orders=True,
+        pre_norm=True,
+        enc_mode=False,
     ),
     #criteria=[dict(type="CrossEntropyLoss", loss_weight=1.0, ignore_index=0)],
-    head_in_channels=96,
-    sculpt_loss_weight=1,
-    reconstruct_loss_weight=1,
+    head_in_channels=72,
+    sculpt_loss_weight=0.5,
+    reconstruct_loss_weight=0.5,
     sculpt_original_point_weight=0,
     sculpt_block_point_weight=1,
     sculpt_mask_point_weight=1,
 )
 
-# optimizer = dict(type="AdamW", lr=0.04, weight_decay=0.04)
-# scheduler = dict(
-#     type="OneCycleLR",
-#     max_lr=optimizer["lr"],
-#     pct_start=0.05,
-#     anneal_strategy="cos",
-#     div_factor=10.0,
-#     final_div_factor=1000.0,
-# )
-
-
-# scheduler settings
-optimizer = dict(type="SGD", lr=0.1, momentum=0.8, weight_decay=0.0001, nesterov=True)
-scheduler = dict(
-    type="OneCycleLR",
-    max_lr=optimizer["lr"],
-    pct_start=0.05,
-    anneal_strategy="cos",
-    div_factor=10.0,
-    final_div_factor=10000.0,
-)
-
 # dataset settings
-dataset_type = "ScanNetDataset"
-data_root = "data/scannet"
+# dataset_type = "ScanNetDataset"
+# data_root = "data/scannet"
 
-data = dict(
-    **sculpting_data_base_configs,
-    train=dict(
-        type=dataset_type,
-        split=[
-            "train",
-            # "val",
-            # "test",
-            # "arkit",
-        ],
-        data_root=data_root,
-        transform=[
+transform=[
             dict(type="CenterShift", apply_z=True),
             # dict(
             #    type="RandomDropout", dropout_ratio=0.2, dropout_application_ratio=0.2
@@ -176,33 +173,73 @@ data = dict(
             dict(
                 type="Collect",
                 keys=("coord", "grid_coord", "segment","mask_balance"),
-                feat_keys=("color","normal"),
+                feat_keys=("coord","color","normal"),
             ),
-        ],
-        test_mode=False,
-    ),
-    val=dict(
-        type=dataset_type,
-        split=[
-            "val",
-            # "arkit",
-        ],
-        data_root=data_root,
-        transform=[
-            dict(type="CenterShift", apply_z=True),
-            update_index_keys,
-            sculpting_transform,
-            voxelize_transform,
-            dict(type="CenterShift", apply_z=False),
-            dict(type="NormalizeColor"),
-            # dict(type="ShufflePoint"),
-            dict(type="ToTensor"),
+        ]
+data = dict(
+    **sculpting_data_base_configs,
+    train=dict(
+        type="ConcatDataset",
+        datasets=[
+            # ScanNet
             dict(
-                type="Collect",
-                keys=("coord", "grid_coord","mask_balance", "segment"),
-                feat_keys=("color","normal"),
+                type="ScanNetDataset",
+                split=["train", "val", "test"],
+                data_root="data/scannet",
+                transform=transform,
+                test_mode=False,
+                loop=1,
+            ),
+            # ScanNet++
+            dict(
+                type="ScanNetPPDataset",
+                split=[
+                    "train_grid1mm_chunk6x6_stride3x3",
+                    "val_grid1mm_chunk6x6_stride3x3",
+                    "test_grid1mm_chunk6x6_stride3x3",
+                ],
+                data_root="data/scannetpp",
+                transform=transform,
+                test_mode=False,
+                loop=1,
+            ),
+            # S3DIS
+            dict(
+                type="S3DISDataset",
+                split=["Area_1", "Area_2", "Area_3", "Area_4", "Area_5", "Area_6"],
+                data_root="data/s3dis",
+                transform=transform,
+                test_mode=False,
+                loop=1,
+            ),
+            # ArkitScenes
+            dict(
+                type="DefaultDataset",
+                split=["Training", "Validation"],
+                data_root="data/arkitscenes",
+                transform=transform,
+                test_mode=False,
+                loop=1,
+            ),
+            # HM3D
+            dict(
+                type="HM3DDataset",
+                split=["train", "val"],
+                data_root="data/hm3d",
+                transform=transform,
+                test_mode=False,
+                force_label=False,
+                loop=1,
+            ),
+            # Structured3D
+            dict(
+                type="Structured3DDataset",
+                split=["train", "val", "test"],
+                data_root="data/structured3d",
+                transform=transform,
+                test_mode=False,
+                loop=1,
             ),
         ],
-        test_mode=False,
     ),
 )

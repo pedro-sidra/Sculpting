@@ -99,7 +99,7 @@ def process_and_build_experiments_df(entity: str, project: str, base_output_dir:
     weight files, and builds a DataFrame summarizing the runs.
     """
     api = wandb.Api()
-    runs = api.runs(f"{entity}/{project}")
+    runs = api.runs(f"{entity}/{project}", order="-created_at")
     
     data = []
     lr_tags = ["LR1", "LR5", "LR10", "LR20", "LR100"]
@@ -165,7 +165,7 @@ def process_and_build_experiments_df(entity: str, project: str, base_output_dir:
                 # 3. Download weights temporarily and run the script
                 with download_temp_weights(api, entity, project, run.id) as weight_path:
                     run_dir = os.path.join(base_output_dir, run.id)
-                    cmd = f"python tools/test.py --config-file {config_path} --num-gpus 8 --options save_path={run_dir} weight={weight_path}".split()
+                    cmd = f"python tools/test.py --config-file {config_path} --num-gpus 4 --options save_path={run_dir} weight={weight_path}".split()
                     print(f"[*] Executing command: {' '.join(cmd)}")
                     
                     # Execute the bash script. check=True will raise an error if the script fails

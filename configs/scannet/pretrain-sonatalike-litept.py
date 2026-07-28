@@ -6,9 +6,9 @@ enable_wandb = False
 # Sculpting params
 sculpting_transform = dict(
     type="AdditiveMasking",
-    mode="trimming",  # "Sculpting" or "Trimming"
+    mode="sculpting",  # "Sculpting" or "Trimming"
     sampling="chessboard",  # "chessboard" or "random" or "random_rotate"
-    density_factor=1.0,
+    density_factor='rand',
     mask_size_min=0.4,
     mask_size_max=0.4,
     cell_size=0.02,
@@ -16,16 +16,18 @@ sculpting_transform = dict(
 )
 
 voxelize_transform = dict(
-    type="VoxelizeAgg",
+    type="VoxelizeAggJIT",
     grid_size=0.02,
     hash_type="fnv",
     mode="train",
     return_grid_coord=True,
+    follow_ref='mask',
     how_to_agg_feats=dict(
         coord="mean",
         color="mean",
-        normal="first",
-        mask="max",
+        # mask="max",
+        segment="max",
+        normal="mean",
     ),
 )
 
@@ -45,12 +47,12 @@ update_index_keys = dict(
 ## ===== MODEL DEFINITION
 
 # misc custom setting
-batch_size = 16  # bs: total bs in all gpus
-num_worker = 16
+batch_size = 98  # bs: total bs in all gpus
+num_worker = 98
 mix_prob = 0
 clip_grad = 3.0
 empty_cache = False
-enable_amp = True
+enable_amp = False
 evaluate = False
 find_unused_parameters = False
 
@@ -61,7 +63,7 @@ model = dict(
     # backbone - student & teacher
     backbone=dict(
         type="LitePT-v1",
-        in_channels=3,
+        in_channels=9,
         order=("z", "z-trans", "hilbert", "hilbert-trans"),
         stride=(2, 2, 2, 2),
         enc_depths=(2, 2, 2, 6, 2),
@@ -143,7 +145,7 @@ transform = [
     dict(type="Copy", keys_dict={"coord": "origin_coord"}),
     dict(
         type="MultiViewGenerator",
-        view_keys=("coord", "origin_coord", "color", "mask"),
+        view_keys=("coord", "origin_coord","normal", "color", "mask"),
         global_view_num=2,
         global_view_scale=(0.4, 1.0),
         local_view_num=4,
@@ -202,20 +204,22 @@ transform = [
         keys=(
             "global_origin_coord",
             "global_coord",
+            "global_normal",
             "global_color",
             "global_offset",
             "global_mask",
             "local_origin_coord",
             "local_coord",
             "local_color",
+            "local_normal",
             "local_offset",
             "local_mask",
             "grid_size",
             "name",
         ),
         offset_keys_dict=dict(),
-        global_feat_keys=("global_color",),
-        local_feat_keys=("local_color",),
+        global_feat_keys=("global_coord","global_color","global_normal"),
+        local_feat_keys=("local_coord","local_color","local_normal"),
     ),
 ]
 
@@ -225,15 +229,68 @@ data_root = "data/scannet"
 
 data = dict(
     train=dict(
-        type=dataset_type,
-        split=[
-            "train",
-            "val",
-            "test",
+        type="ConcatDataset",
+        datasets=[
+            # ScanNet
+            dict(
+                type="ScanNetDataset",
+                split=["train", "val", "test"],
+                data_root="data/scannet",
+                transform=transform,
+                test_mode=False,
+                loop=1,
+            ),
+            # ScanNet++
+            dict(
+                type="ScanNetPPDataset",
+                split=[
+                    "train_grid1mm_chunk6x6_stride3x3",
+                    "val_grid1mm_chunk6x6_stride3x3",
+                    "test_grid1mm_chunk6x6_stride3x3",
+                ],
+                data_root="data/scannetpp",
+                transform=transform,
+                test_mode=False,
+                loop=1,
+            ),
+            # S3DIS
+            dict(
+                type="S3DISDataset",
+                split=["Area_1", "Area_2", "Area_3", "Area_4", "Area_5", "Area_6"],
+                data_root="data/s3dis",
+                transform=transform,
+                test_mode=False,
+                loop=1,
+            ),
+            # ArkitScenes
+            dict(
+                type="DefaultDataset",
+                split=["Training", "Validation"],
+                data_root="data/arkitscenes",
+                transform=transform,
+                test_mode=False,
+                loop=1,
+            ),
+            # HM3D
+            dict(
+                type="HM3DDataset",
+                split=["train", "val"],
+                data_root="data/hm3d",
+                transform=transform,
+                test_mode=False,
+                force_label=False,
+                loop=1,
+            ),
+            # Structured3D
+            dict(
+                type="Structured3DDataset",
+                split=["train", "val", "test"],
+                data_root="data/structured3d",
+                transform=transform,
+                test_mode=False,
+                loop=1,
+            ),
         ],
-        data_root=data_root,
-        transform=transform,
-        test_mode=False,
     ),
 )
 
@@ -249,9 +306,9 @@ hooks = [
         mask_size_base=0.4,
         mask_size_end=0.4,
         mask_size_warmup_ratio=0.25,
-        mask_ratio_start=0.3,
+        mask_ratio_start=0.8,
         mask_ratio_base=1.0,
-        mask_ratio_end=1.0,
+        mask_ratio_end=1.5,
         mask_ratio_warmup_ratio=0.5,
     ),
     dict(type="SemSegEvaluator"),

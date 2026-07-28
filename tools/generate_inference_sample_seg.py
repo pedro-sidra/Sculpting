@@ -33,8 +33,8 @@ api=wandb.Api()
 
 run_ids = sys.argv[1:]
 for run_id in run_ids:
-    config_file = save_run_config(api, WANDB_ENTITY,WANDB_PROJECT, run_id)
-    # config_file="/workspaces/Sculpting/configs/scannet/semseg-spunet-sidra-efficient-lr1.py"
+    # config_file = save_run_config(api, WANDB_ENTITY,WANDB_PROJECT, run_id)
+    config_file="/workspaces/Sculpting/configs/scannet/semseg-spunet-sidra-efficient-lr1.py"
     run_dir=f"./run_data/{run_id}"
     run_path = f"{WANDB_ENTITY}/{WANDB_PROJECT}/{run_id}"
     run = api.run(run_path)
@@ -95,8 +95,8 @@ for run_id in run_ids:
             y=coord[:,1],
             z=coord[:,2],
             rgb=rgb,
-            label=input_dict['segment'].numpy(),
-            pred=input_dict['pred'].numpy(),
+            label=input_dict['segment'].numpy().astype(np.int32),
+            pred=input_dict['pred'].numpy().astype(np.int32),
         ))
 
         pandas_to_pypcd(
