@@ -137,6 +137,7 @@ class Sculptor(PointModel):
             pass
         else:
             result_dict["seg_logits"] = sculpt_pred
+            result_dict["reconstruct_pred"] = reconstruct_pred
 
 
         return result_dict

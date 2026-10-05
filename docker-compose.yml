@@ -8,7 +8,7 @@ services:
     entrypoint: "./docker-entrypoint.sh"
     command: "bash"
     working_dir: /workspaces/Sculpting
-    network_mode: host
+    # network_mode: host
     environment: 
       - TERM=xterm-256color
       # - GLOO_SOCKET_IFNAME=enp4s0 
@@ -22,9 +22,9 @@ services:
     volumes:
       - .:/workspaces/Sculpting
       - $HOME/.netrc:/root/.netrc
-      - /raid/sidra/arkit_train:/workspaces/Sculpting/data/scannet/arkit
+      - /raid/sonata_dataset/:/workspaces/Sculpting/data
       - $HOME/.bash_history:/root/.bash_history
-    shm_size: "32gb"
+    shm_size: "128gb"
     privileged: false
     stdin_open: true # docker run -i
     tty: true # docker run -t

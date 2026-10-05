@@ -67,9 +67,13 @@ for run_id in run_ids:
             pred = output.max(1)[1]
             # segment = input_dict["segment"]
             input_dict['pred']=pred
+
+            if 'reconstruct_pred' in output_dict:
+                input_dict['reconstruct_pred']=output_dict['reconstruct_pred']
             break
 
-        feat_key = 'feat'
+        feat_key = 'reconstruct_pred'
+        # color_idx=slice(3,6)
         coord_key = 'coord'
         seg_key = 'pred'
 
@@ -79,7 +83,7 @@ for run_id in run_ids:
             if isinstance(input_dict[key], torch.Tensor):
                 input_dict[key] = input_dict[key].cpu()
 
-        colors = input_dict[feat_key][:,-3:]
+        colors = input_dict[feat_key][:,3:6]
         c= (colors-colors.min())/(colors.max()-colors.min())
         coord=input_dict[coord_key]
 
@@ -111,7 +115,7 @@ for run_id in run_ids:
             label=label,
             pred=pred,
             pred_viz=predviz
-        ))
+        )).astype(np.float32)
 
         pandas_to_pypcd(
             pc_data

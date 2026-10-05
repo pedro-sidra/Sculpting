@@ -10,6 +10,7 @@ git config --global --add safe.directory /workspace
 python -m pip install -e .
 python -m pip install -e ./perlyn
 python -m pip install git+https://github.com/isisim/pypcd
+# python -m pip install numba
 cd /workspaces/Sculpting/Pointcept/libs/pointrope && python setup.py install && cd /workspaces/Sculpting
 # pip install transformers==4.45.2 tokenizers==0.20.1 peft==0.12.0
 

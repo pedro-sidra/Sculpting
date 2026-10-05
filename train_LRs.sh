@@ -3,15 +3,16 @@ set -e
 
 DIST_URL='auto'
 DATASET=scannet
-CONFIG_BASE=semseg-spunet-sidra-efficient-lr
-EXP_NAME_BASE="diss/FT-spunet-enc-sonata-lr"
+CONFIG_BASE=semseg-litept-sidra-efficient-lr
+EXP_NAME_BASE="diss/FT-sonata-litept-full"
 MACHINES=1
 GPUS=4
-WEIGHT="pedrosidra/debug/leq4cgk7-model_last:v19"
+WEIGHT="pedrosidra/diss/3pqn3zzl-model_last:v19"
 
 export PYTHONPATH=/workspaces/Sculpting/Pointcept
+# export CUDA_VISIBLE_DEVICES=0,1,2,3
 
-# TRAIN_COMMAND="scripts/train.sh -g 8 -d scannet -c pretrain-sonata-litept -n debug/pretrain-sonata-litept"
+# TRAIN_COMMAND="scripts/train.sh -g 4 -d scannet -c pretrain-sonatalike-spunet -n diss/pretrain-sonatalike-normals"
 # bash $TRAIN_COMMAND
 
 

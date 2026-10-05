@@ -1,4 +1,5 @@
 from pointcept.engines.defaults import  default_setup
+from pathlib import Path
 from pointcept.engines.defaults import (
     default_argument_parser,
     default_config_parser,
@@ -25,14 +26,19 @@ if __name__=="__main__":
     trainer = TRAINERS.build(dict(type=cfg.train.type, cfg=cfg))
 
     train_loader = trainer.train_loader
-    i, input_dict = next(enumerate(train_loader))
+    
+    for i, input_dict in enumerate(train_loader):
+        scene_name = trainer.train_loader.dataset.data_list[i]
+        print(scene_name)
+        # if i>3:
+        break
 
     # breakpoint()
     feat_key = 'feat'
     coord_key = 'coord'
     seg_key = 'segment'
 
-    colors = input_dict[feat_key][:,:3]
+    colors = input_dict[feat_key][:,3:6]
     c= (colors-colors.min())/(colors.max()-colors.min())
     coord=input_dict[coord_key]
 

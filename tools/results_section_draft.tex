@@ -1,0 +1,47 @@
+% Draft based on the 20 selected runs in tools/classwise_tables/run_manifest.csv.
+% Compile from the repository root, or set \classwiseTableDir before inputting
+% this file to the path containing the four generated table fragments.
+% No additional LaTeX packages are required.
+% Values and differences below were calculated from the full-precision CSVs.
+% MAE+AM+Sculpt Mixed LitePT at LR100 uses the FT-reconstructor-litept
+% results.csv row (run z5qoelcv), as specified by the report author.
+\providecommand{\classwiseTableDir}{tools/classwise_tables}
+
+\section{Effect of pre-training on semantic segmentation}
+\label{sec:classwise-results}
+
+We compare SPUnet from scratch with MAE+AM+Sculpt Mixed SPUnet, followed by LitePT from scratch with MAE+AM+Sculpt Mixed LitePT, on the 20-class ScanNet validation split. The MAE+AM+Sculpt Mixed variants use pre-training followed by fine-tuning. Each comparison uses the corresponding LR1, LR5, LR10, LR20, or LR100 split. The tables report per-class intersection over union (IoU) and its unweighted mean across classes (mIoU), expressed as percentages. Differences discussed below are absolute percentage-point (pp) changes, computed before rounding.
+
+\subsection{Overall effect across label splits}
+
+Pre-training improves mIoU for both architectures at every evaluated split. For SPUnet, the largest aggregate improvements occur at LR1 and LR5, where mIoU increases from 21.07\% to 27.25\% and from 44.17\% to 50.85\%, respectively, when moving from SPUnet from scratch to MAE+AM+Sculpt Mixed SPUnet. These correspond to gains of 6.18 and 6.68 pp. The SPUnet gains at LR10, LR20, and LR100 are 2.46, 1.37, and 2.38 pp. Thus, pre-training is particularly beneficial to SPUnet in the smallest label splits, but the gain does not decrease monotonically with increasing supervision.
+
+For LitePT, moving from LitePT from scratch to MAE+AM+Sculpt Mixed LitePT yields gains of 1.67, 3.20, 2.13, 2.99, and 0.56 pp at LR1, LR5, LR10, LR20, and LR100, respectively. At LR5, mIoU increases from 47.56\% to 50.76\%, while at LR20 it increases from 65.26\% to 68.25\%. The smaller LR100 improvement, from 75.33\% to 75.89\%, indicates that the aggregate benefit is reduced when the full training split is available, although substantial gains remain for individual classes.
+
+The stronger SPUnet gains at LR1 and LR5 narrow the gap between the architectures: their pre-trained mIoUs differ by only 0.12 and 0.09 pp at these splits, compared with scratch-model gaps of 4.64 and 3.39 pp. These small differences describe the selected runs and should not be interpreted as evidence of equivalence.
+
+\subsection{Class-wise effects for SPUnet}
+
+The comparison between SPUnet from scratch and MAE+AM+Sculpt Mixed SPUnet in Tables~\ref{tab:classwise-spunet-scratch} and~\ref{tab:classwise-FT-sculptor-spunet} reveals broad improvements in the smallest label splits. At LR1, 16 classes improve and four remain unchanged, with no decreases. The largest gains are for counter (18.79 pp), cabinet (14.64 pp), and sofa (13.56 pp). At LR5, 19 of the 20 classes improve; bathtub gains 19.34 pp, picture 16.56 pp, and bookshelf 11.33 pp. Sofa is the only class to decline at LR5, by 2.86 pp. The large mIoU improvements at these splits therefore reflect gains across many classes rather than a single isolated change.
+
+Counter and curtain improve at every SPUnet split. Counter gains range from 2.15 to 18.79 pp, while curtain gains range from 5.02 to 19.23 pp. Curtain is especially responsive at LR20 and LR100, with improvements of 19.23 and 15.94 pp, respectively. Window, door, picture, bookshelf, and desk also improve at every split, supporting a broader pattern of class-wise benefit beyond the largest individual gains.
+
+Nevertheless, positive mIoU changes can mask substantial regressions. At LR20, shower curtain loses 13.85 pp, alongside losses of 5.12 pp for bed and 2.82 pp for sofa, even though overall mIoU improves by 1.37 pp. Shower curtain also declines by 4.78 pp at LR100. Pre-training does not eliminate zero-IoU classes at LR1: shower curtain, toilet, sink, and bathtub remain at zero in both SPUnet variants.
+
+\input{\classwiseTableDir/spunet-scratch.tex}
+\input{\classwiseTableDir/FT-sculptor-spunet.tex}
+
+\subsection{Class-wise effects for LitePT}
+
+Tables~\ref{tab:classwise-litept-scratch} and~\ref{tab:classwise-pretrain-sculptor-litept} compare LitePT from scratch with MAE+AM+Sculpt Mixed LitePT. The improvement is distributed across multiple classes, while its magnitude is strongly class dependent. Pre-training improves 14, 16, 15, 17, and 13 of the 20 classes at LR1, LR5, LR10, LR20, and LR100, respectively. Refrigerator is a particularly consistent beneficiary, with gains of 10.10, 14.45, 5.82, 7.68, and 8.48 pp across the five splits. At LR5, its IoU rises from 18.73\% to 33.17\%; at LR100, it rises from 67.40\% to 75.88\%. Bookshelf also improves at every split, including gains of 9.69 pp at LR5 and 8.54 pp at LR20. These results show that a small overall mIoU gain can coexist with a substantial improvement for a particular class.
+
+Other gains depend more strongly on the label split. Counter improves by 11.93 pp at LR5 but declines by 2.34 pp at LR10. Curtain gains 12.59 pp at LR20 but loses 2.31 pp at LR100. Sofa is the clearest consistent exception to the overall benefit: its IoU decreases at every split, with losses ranging from 1.05 to 7.31 pp. Pre-training also leaves the LR1 IoUs for shower curtain, toilet, and bathtub at zero. It therefore improves the aggregate score without resolving all class-specific failures under the smallest label split.
+
+\input{\classwiseTableDir/litept-scratch.tex}
+\input{\classwiseTableDir/pretrain-sculptor-litept.tex}
+
+\subsection{Interpretation of class-dependent gains}
+
+The results support a consistent aggregate advantage for pre-training, with its strongest beneficiaries depending on the architecture and label split. Counter and curtain show particularly strong, consistent gains for SPUnet, while refrigerator stands out for LitePT. Bookshelf, window, and table improve at every split for both architectures. By comparison, floor gains are generally modest: they remain below 1 pp except for LitePT at LR1. Scratch-model floor IoUs already exceed 89\% in every split, leaving comparatively little room for improvement. The contrast between SPUnet's mixed sofa outcomes and LitePT's consistent sofa losses further shows that class-specific effects cannot be assumed to transfer unchanged between architectures.
+
+These comparisons are descriptive results for one selected run per architecture, training regime, and split. They do not establish statistical significance or isolate pre-training from other possible differences between the selected runs. The class-wise scores alone also do not establish whether gains arise from class frequency, object geometry, or similarity to the pre-training data. Repeated runs and targeted analyses would be needed to test those explanations. Within the evaluated runs, the evidence indicates that pre-training improves overall segmentation while producing uneven class-wise gains and occasional substantial regressions.

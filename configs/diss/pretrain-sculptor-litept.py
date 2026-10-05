@@ -2,8 +2,8 @@ _base_ = ["../_base_/default_runtime.py"]
 
 epoch = 100
 # misc custom setting
-batch_size = 32  # bs: total bs in all gpus
-num_worker = 32
+batch_size = 35  # bs: total bs in all gpus
+num_worker = 35
 mix_prob = 0.0
 clip_grad = 1.0
 empty_cache = False
@@ -45,12 +45,13 @@ param_dicts = [dict(keyword="block", lr=0.0006)]
 # Sculpting params
 sculpting_transform = dict(
     type="AdditiveMasking",
-    mode="trimming",  # "Sculpting" or "Trimming"
+    mode="rand",  # "Sculpting" or "Trimming"
     sampling="chessboard",  # "chessboard" or "random" or "random_rotate"
-    density_factor="1",
+    density_factor=0.5,
     mask_size_min=0.1,
     mask_size_max=0.4,
     cell_size=0.02,
+    mask_ratio=1,
     mask_feature_mode_1="null",
     mask_feature_mode_2=None,
     mask_dictname="segment",
@@ -64,11 +65,11 @@ voxelize_transform = dict(
     return_grid_coord=True,
     follow_ref='segment',
     how_to_agg_feats=dict(
-        coord="follow-1",
-        color="follow-2",
+        coord="mean",
+        color="mean",
         # mask="max",
         segment="max",
-        normal="follow-2",
+        normal="mean",
     ),
 )
 update_index_keys = dict(
@@ -102,7 +103,7 @@ model = dict(
     type="Sculptor-v1m1",
     backbone=dict(
         type="LitePT-v1",
-        in_channels=9,
+        in_channels=6,
         order=("z", "z-trans", "hilbert", "hilbert-trans"),
         stride=(2, 2, 2, 2),
         enc_depths=(2, 2, 2, 6, 2),
@@ -165,7 +166,7 @@ transform=[
             update_index_keys,
             sculpting_transform,
             voxelize_transform,
-            dict(type="SphereCrop", point_max=120000, mode="random"),
+            dict(type="SphereCrop", point_max=300000, mode="random"),
             dict(type="CenterShift", apply_z=False),
             dict(type="NormalizeColor"),
             # dict(type="ShufflePoint"),
@@ -173,7 +174,7 @@ transform=[
             dict(
                 type="Collect",
                 keys=("coord", "grid_coord", "segment","mask_balance"),
-                feat_keys=("coord","color","normal"),
+                feat_keys=("color","normal"),
             ),
         ]
 data = dict(
@@ -191,18 +192,18 @@ data = dict(
                 loop=1,
             ),
             # ScanNet++
-            dict(
-                type="ScanNetPPDataset",
-                split=[
-                    "train_grid1mm_chunk6x6_stride3x3",
-                    "val_grid1mm_chunk6x6_stride3x3",
-                    "test_grid1mm_chunk6x6_stride3x3",
-                ],
-                data_root="data/scannetpp",
-                transform=transform,
-                test_mode=False,
-                loop=1,
-            ),
+            # dict(
+            #     type="ScanNetPPDataset",
+            #     split=[
+            #         "train_grid1mm_chunk6x6_stride3x3",
+            #         "val_grid1mm_chunk6x6_stride3x3",
+            #         "test_grid1mm_chunk6x6_stride3x3",
+            #     ],
+            #     data_root="data/scannetpp",
+            #     transform=transform,
+            #     test_mode=False,
+            #     loop=1,
+            # ),
             # S3DIS
             dict(
                 type="S3DISDataset",
